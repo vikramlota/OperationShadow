@@ -41,7 +41,7 @@ cd backend
 
 ### Frontend Checks
 ```bash
-cd dashboard/react
+cd frontend
 npm run typecheck
 npm test -- --run
 npm run build

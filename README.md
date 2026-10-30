@@ -13,7 +13,7 @@ Operation Shadow is a local, indoor multi-vehicle mission-control system coordin
 - [Assumptions & Architecture Reference](docs/assumptions.md)
 - [Agent Guidelines](AGENTS.md)
 
-## Repository Layout (TRD v2.0 §26)
+## Repository Layout (Segregated Architecture)
 
 ```text
 operation-shadow/
@@ -21,14 +21,45 @@ operation-shadow/
 ├── README.md
 ├── .env.example
 ├── .gitignore
-├── docs/                                  # Complete product specification suite
-│   ├── Operation Shadow — PRD v2.0.md
-│   ├── Operation Shadow — TRD v2.0.md
-│   ├── Operation Shadow — ULTRON Agent Architecture.md
-│   ├── Operation Shadow — Backend & Frontend Architecture.md
-│   ├── ui-design-spec.md
-│   ├── implementation-plan.md
-│   └── assumptions.md
+├── frontend/                              # Segregated React Tactical C2 Dashboard (§8, §26)
+│   ├── package.json
+│   ├── tsconfig.json
+│   ├── vite.config.ts
+│   └── src/
+│       ├── App.tsx                        # Global operations bar & 3-column tactical C2 grid
+│       ├── api/client.ts                  # Typed REST client for all backend endpoints
+│       ├── components/                    # FloorMap, VehicleStatusCard, MissionPanel, CameraFeed,
+│       │                                  # EventLog, ReasoningTracePanel, MissionReplayScrubber,
+│       │                                  # SimulatedModeToggle, EmergencyStopButton
+│       ├── hooks/                         # useDashboardSocket (single managed WS + reconnect resync)
+│       ├── state/store.tsx                # React Context + useReducer store with sequence guards
+│       ├── styles/tactical.css            # Military tactical C2 design tokens & layout
+│       └── __tests__/                     # Vitest + React Testing Library test suite
+├── backend/                               # Segregated FastAPI C2 Backend Service (§3, §26)
+│   ├── pyproject.toml
+│   ├── requirements.txt
+│   ├── fastapi/                           # FastAPI application modules (§3)
+│   │   ├── main.py                        # FastAPI app, lifespan, /health, and /ws/dashboard
+│   │   ├── api/                           # REST endpoints (/mission, /vehicle, /events, /map, /emergency-stop)
+│   │   ├── websocket/                     # DashboardGateway & VehicleGatewayFastPath (§5, §10)
+│   │   ├── db/                            # SQLAlchemy 2.0 ORM models & async session lifecycle (§6)
+│   │   ├── schemas/                       # Pydantic v2 domain, error, and WebSocket contracts (§5, §6, §7)
+│   │   ├── core/                          # Settings, security, structured logging, error handlers
+│   │   └── services/                      # MissionService, VehicleService, and EventService
+│   ├── ultron_stub/                       # Isolated ULTRON stub, VehicleAdapterPort & deterministic simulator
+│   └── tests/                             # Backend pytest suite (29 tests across Milestones 1–6)
+├── hardware/                              # Dedicated Robotics & Embedded Hardware Layer
+│   ├── scout/                             # SCOUT01 Ground Rover System (Raspberry Pi, TRD §8, §15)
+│   │   ├── navigation/                    # Waypoint following + reactive obstacle avoidance (§15)
+│   │   ├── sensors/                       # Sensor fusion (IMU, ToF, ultrasonic, temp, gas, camera)
+│   │   ├── communication/                 # Authenticated WebSocket client & ESP32 UART bridge
+│   │   └── main.py                        # SCOUT Pi entry point
+│   └── firmware/                          # SCOUT01 Low-Level Hardware Firmware (TRD §8, §26)
+│       └── esp32/
+│           ├── motors/                    # PWM motor controller & emergency cutoff
+│           ├── sensors/                   # Ultrasonic, ToF, temperature & gas ADC reader
+│           ├── safety/                    # Hardware kill switch & watchdog safety layer
+│           └── main.cpp                   # ESP32 main setup/loop entry
 ├── ultron/                                # In-process ULTRON Agent System (§4, §26)
 │   ├── planner/                           # LLM planning call, structured schemas, fallback cache
 │   ├── memory/                            # World Model snapshot store & timeline scrubber
@@ -43,57 +74,21 @@ operation-shadow/
 │   ├── config.py
 │   ├── state.py
 │   └── main.py                            # Standalone ULTRON runner
-├── scout/                                 # SCOUT01 Ground Rover System (Raspberry Pi, TRD §8, §15)
-│   ├── navigation/                        # Waypoint following + reactive obstacle avoidance (§15)
-│   ├── sensors/                           # Sensor fusion (IMU, ToF, ultrasonic, temp, gas, camera)
-│   ├── communication/                     # Authenticated WebSocket client & ESP32 UART bridge
-│   └── main.py                            # SCOUT Pi entry point
-├── hawk/                                  # HAWK01 Aerial Drone System (Companion link, TRD §9, §16)
-│   ├── flight_interface/                  # Flight controller wrapper & onboard geofence/safety
-│   ├── sensors/                           # Flight telemetry monitor (alt, battery) & camera stream
-│   ├── communication/                     # Authenticated WebSocket companion link
-│   └── main.py                            # HAWK companion entry point
-├── firmware/                              # SCOUT01 Low-Level Hardware Firmware (TRD §8, §26)
-│   └── esp32/
-│       ├── motors/                        # PWM motor controller & emergency cutoff
-│       ├── sensors/                       # Ultrasonic, ToF, temperature & gas ADC reader
-│       ├── safety/                        # Hardware kill switch & watchdog safety layer
-│       └── main.cpp                       # ESP32 main setup/loop entry
-├── backend/                               # FastAPI C2 Backend Service (§3, §26)
-│   ├── pyproject.toml
-│   ├── requirements.txt
-│   ├── fastapi/                           # FastAPI application modules (§3)
-│   │   ├── main.py                        # FastAPI app, lifespan, /health, and /ws/dashboard
-│   │   ├── api/                           # REST endpoints (/mission, /vehicle, /events, /map, /emergency-stop)
-│   │   ├── websocket/                     # DashboardGateway & VehicleGatewayFastPath (§5, §10)
-│   │   ├── db/                            # SQLAlchemy 2.0 ORM models & async session lifecycle (§6)
-│   │   ├── schemas/                       # Pydantic v2 domain, error, and WebSocket contracts (§5, §6, §7)
-│   │   ├── core/                          # Settings, security, structured logging, error handlers
-│   │   └── services/                      # MissionService, VehicleService, and EventService
-│   ├── ultron_stub/                       # Isolated ULTRON stub, VehicleAdapterPort & deterministic simulator
-│   └── tests/                             # Backend pytest suite (29 tests across Milestones 1–6)
-├── dashboard/                             # React Tactical C2 Dashboard (§8, §26)
-│   └── react/                             # Vite + React + TypeScript tactical C2 dashboard
-│       ├── package.json
-│       ├── tsconfig.json
-│       ├── vite.config.ts
-│       └── src/
-│           ├── App.tsx                    # Global operations bar & 3-column tactical C2 grid
-│           ├── api/client.ts              # Typed REST client for all backend endpoints
-│           ├── components/                # FloorMap, VehicleStatusCard, MissionPanel, CameraFeed,
-│           │                              # EventLog, ReasoningTracePanel, MissionReplayScrubber,
-│           │                              # SimulatedModeToggle, EmergencyStopButton
-│           ├── hooks/                     # useDashboardSocket (single managed WS + reconnect resync)
-│           ├── state/store.tsx            # React Context + useReducer store with sequence guards
-│           ├── styles/tactical.css        # Military tactical C2 design tokens & layout
-│           └── __tests__/                 # Vitest + React Testing Library test suite (8 suites)
 ├── configs/                               # Tactical & Scenario Configuration Files (TRD §26)
 │   ├── mission_demo.json                  # Rehearsed building inspection scenario (M001)
 │   ├── geofence.json                      # Venue boundaries, fixed hover points & no-fly zones
 │   ├── vehicles.json                      # Vehicle hardware profiles, ports & heartbeat limits
 │   └── simulation.json                    # Simulation tick rate & scripted hazard injection timing
+├── docs/                                  # Complete product specification suite
+│   ├── Operation Shadow — PRD v2.0.md
+│   ├── Operation Shadow — TRD v2.0.md
+│   ├── Operation Shadow — ULTRON Agent Architecture.md
+│   ├── Operation Shadow — Backend & Frontend Architecture.md
+│   ├── ui-design-spec.md
+│   ├── implementation-plan.md
+│   └── assumptions.md
 └── tests/                                 # End-to-end and agent verification tests (TRD §26)
-    ├── test_system_architecture.py        # Validates TRD §26 layout compliance
+    ├── test_system_architecture.py        # Validates layout compliance
     ├── test_ultron_safety.py              # Validates Safety Validator & geofence constraints
     ├── test_ultron_replanning.py          # Validates Evaluator replanning triggers
     └── test_ultron_planner.py             # Validates fallback cache & task decomposition
@@ -141,7 +136,7 @@ PYTHONPATH=fastapi:. uvicorn main:app --reload --host 127.0.0.1 --port 8000
 
 ### 3. Frontend Setup & Run
 ```bash
-cd dashboard/react
+cd frontend
 npm install
 npm run dev
 ```
@@ -163,7 +158,7 @@ cd backend
 .venv/bin/mypy fastapi ultron_stub tests
 
 # Frontend (TypeScript check, 8 Vitest suites, and production Vite build)
-cd ../dashboard/react
+cd ../frontend
 npm run typecheck
 npm test -- --run
 npm run build
@@ -171,4 +166,4 @@ npm run build
 
 ## Hardware Invariants & Physical Safety
 - **Simulated Mode Default & Hardware Lockout**: Physical vehicle control (`mode="real"`) is strictly locked out by default (`SHADOW_HARDWARE_LOCKOUT=true` and `LockedRealVehicleAdapter`) until onboard physical failsafes and venue boundaries are confirmed.
-- **Specification Suite Fully Integrated**: PRD v2.0, TRD v2.0, ULTRON Agent Architecture, and Backend & Frontend Architecture specifications are now integrated in `docs/` and reflected across `ultron/`, `scout/`, `hawk/`, `firmware/`, `backend/`, and `dashboard/`.
+- **Specification Suite Fully Integrated**: PRD v2.0, TRD v2.0, ULTRON Agent Architecture, and Backend & Frontend Architecture specifications are now integrated in `docs/` and reflected across `ultron/`, `hardware/`, `backend/`, and `frontend/`.
