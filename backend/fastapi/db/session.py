@@ -7,8 +7,8 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from core.config import settings
-from db.models import Base, Vehicle
-from sqlalchemy import event, select, text
+from db.models import Base, Observation, Task, Vehicle
+from sqlalchemy import event, select, text, update
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -72,11 +72,6 @@ DEFAULT_VEHICLES: tuple[dict[str, Any], ...] = (
 
 async def seed_default_vehicles(session: AsyncSession) -> None:
     """Idempotently seed SCOUT01 and reset stale CONNECTED states on cold boot."""
-    # Clean up any legacy HAWK01 record
-    hawk_row = (await session.execute(select(Vehicle).where(Vehicle.id == "HAWK01"))).scalar_one_or_none()
-    if hawk_row is not None:
-        await session.delete(hawk_row)
-
     result = await session.execute(
         select(Vehicle).where(Vehicle.id.in_(["SCOUT01"]))
     )
@@ -105,6 +100,22 @@ async def seed_default_vehicles(session: AsyncSession) -> None:
             existing.connection = "DISCONNECTED"
             if existing.status in ("ACTIVE", "EXECUTING"):
                 existing.status = "IDLE"
+
+    await session.flush()
+
+    # Reassign any historical legacy HAWK01 records to SCOUT01 to prevent NOT NULL constraint violations
+    await session.execute(
+        update(Observation).where(Observation.vehicle_id == "HAWK01").values(vehicle_id="SCOUT01")
+    )
+    await session.execute(
+        update(Task).where(Task.vehicle_id == "HAWK01").values(vehicle_id="SCOUT01")
+    )
+
+    # Clean up any legacy HAWK01 record
+    hawk_row = (await session.execute(select(Vehicle).where(Vehicle.id == "HAWK01"))).scalar_one_or_none()
+    if hawk_row is not None:
+        await session.delete(hawk_row)
+
     await session.commit()
 
 
