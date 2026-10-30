@@ -28,10 +28,12 @@ env/
 .env
 *.local
 
-# SQLite Database
+# SQLite Database & Runtime Uploads
 *.db
 *.sqlite
 *.sqlite3
+saved_maps/
+backend/saved_maps/
 
 # Node / React
 node_modules/
@@ -58,10 +60,6 @@ dashboard/react/.vite/
 htmlcov/
 .coverage
 aiml/
-.env
-__pycache__/
-
 # Environment and secret files
-.env
 .env.*
 !.env.example

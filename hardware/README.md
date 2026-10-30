@@ -11,6 +11,11 @@ hardware/
 │   ├── sensors/              # Sensor fusion (IMU, ToF, ultrasonic, temp, gas, camera)
 │   ├── communication/        # Authenticated WebSocket client & ESP32 UART bridge
 │   └── main.py               # SCOUT Pi entry point
+├── hawk/                     # HAWK01 Aerial Drone System (Companion Link & FC, TRD §9, §16)
+│   ├── flight_interface/     # Fixed hover-point & waypoint Flight Controller wrapper
+│   ├── sensors/              # IMU, barometer & critical battery RTL monitor
+│   ├── communication/        # Authenticated WebSocket telemetry & command client
+│   └── main.py               # HAWK companion entry point
 └── firmware/                 # SCOUT01 Low-Level Hardware Firmware (TRD §8, §26)
     └── esp32/
         ├── motors/           # PWM motor controller & emergency cutoff

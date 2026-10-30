@@ -7,6 +7,7 @@ from typing import Annotated
 from core.security import verify_vehicle_token
 from db.session import get_db_session
 from fastapi import APIRouter, Depends, Query, Request
+from schemas.detections import DetectionsPushPayload
 from schemas.entities import (
     ObservationRead,
     VehicleCommandAckResponse,
@@ -16,7 +17,8 @@ from schemas.entities import (
     VehicleSimulateRequest,
     VehicleStatusResponse,
 )
-from services.vehicle_service import VehicleService, vehicle_service
+from services.perception_service import PerceptionService, perception_service
+from services.vehicle_service import VehicleService, resolve_vehicle_id, vehicle_service
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/vehicle", tags=["vehicle"])
@@ -26,6 +28,12 @@ def get_vehicle_service(request: Request) -> VehicleService:
     """Resolve VehicleService from app.state or fall back to default singleton."""
     svc: VehicleService | None = getattr(request.app.state, "vehicle_service", None)
     return svc if svc is not None else vehicle_service
+
+
+def get_perception_service(request: Request) -> PerceptionService:
+    """Resolve PerceptionService from app.state or fall back to default singleton."""
+    svc: PerceptionService | None = getattr(request.app.state, "perception_service", None)
+    return svc if svc is not None else perception_service
 
 
 @router.get("/{vehicle_id}/status", response_model=VehicleStatusResponse)
@@ -46,6 +54,16 @@ async def get_vehicle_sensors_endpoint(
 ) -> VehicleSensorsResponse:
     """Return latest raw telemetry and sensor state for a vehicle (§7)."""
     return await service.get_vehicle_sensors(session, vehicle_id)
+
+
+@router.get("/{vehicle_id}/detections", response_model=DetectionsPushPayload)
+async def get_vehicle_detections_endpoint(
+    vehicle_id: str,
+    perception_svc: Annotated[PerceptionService, Depends(get_perception_service)],
+) -> DetectionsPushPayload:
+    """Return current live ROSBridge object-detection state and freshness for `vehicle_id`."""
+    vid = resolve_vehicle_id(vehicle_id)
+    return perception_svc.get_vehicle_detection_state(vid)
 
 
 @router.get("/{vehicle_id}/observations", response_model=list[ObservationRead])

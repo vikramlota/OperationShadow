@@ -4,6 +4,8 @@ import { formatTacticalTimestamp } from "./VehicleStatusCard";
 
 export function ReasoningTracePanel(): React.JSX.Element {
   const { state } = useDashboardStore();
+  const decisionTraces = state.detections.SCOUT01.decisionTraces ?? [];
+  const freeSpace = state.detections.SCOUT01.freeSpace;
 
   return (
     <section className="panel" aria-label="Reasoning Trace Panel">
@@ -17,7 +19,26 @@ export function ReasoningTracePanel(): React.JSX.Element {
       </div>
 
       <div className="panel-body">
-        {state.reasoningTraces.length === 0 ? (
+        {freeSpace && (
+          <div
+            data-testid="decision-trace-free-space-banner"
+            style={{
+              padding: "4px 6px",
+              marginBottom: "4px",
+              background: "var(--sf-base)",
+              border: "1px solid var(--border-subtle)",
+              fontFamily: "var(--font-data)",
+              fontSize: "9px",
+              color: freeSpace.is_verified_clear
+                ? "var(--status-nominal)"
+                : "var(--status-warning)",
+            }}
+          >
+            FREE-SPACE STATUS [{freeSpace.epistemic_status}]: {freeSpace.reason}
+          </div>
+        )}
+
+        {state.reasoningTraces.length === 0 && decisionTraces.length === 0 ? (
           <div style={{ color: "var(--text-muted)", fontSize: "11px", padding: "8px 0" }}>
             No reasoning traces recorded.
           </div>
@@ -27,6 +48,9 @@ export function ReasoningTracePanel(): React.JSX.Element {
               const isStubRationale =
                 state.ultronIsStub ||
                 trace.rationale.toUpperCase().includes("ULTRON_STUB");
+              const matchingDt = decisionTraces.find(
+                (dt) => dt.mission_id === trace.mission_id,
+              );
               return (
                 <div key={trace.id} className="log-entry log-entry-nominal">
                   <div className="log-meta" style={{ display: "flex", justifyContent: "space-between" }}>
@@ -50,6 +74,33 @@ export function ReasoningTracePanel(): React.JSX.Element {
                   <div className="log-text" style={{ fontSize: "11px", color: "var(--text-primary)" }}>
                     {trace.rationale}
                   </div>
+                  {matchingDt && (
+                    <div
+                      data-testid={`decision-trace-evidence-${trace.id}`}
+                      style={{
+                        marginTop: "3px",
+                        fontFamily: "var(--font-data)",
+                        fontSize: "9px",
+                        color: "var(--text-secondary)",
+                      }}
+                    >
+                      <div>
+                        SAFETY VALIDATOR:{" "}
+                        {matchingDt.safety_validator_passed ? "PASSED" : "REJECTED"}
+                        {matchingDt.replanning_triggered ? " // REPLAN TRIGGERED" : ""}
+                      </div>
+                      {matchingDt.environmental_facts_used.length > 0 && (
+                        <div>
+                          FACTS: {matchingDt.environmental_facts_used.join("; ")}
+                        </div>
+                      )}
+                      {matchingDt.unknowns_and_uncertainties.length > 0 && (
+                        <div style={{ color: "var(--status-warning)" }}>
+                          UNKNOWNS: {matchingDt.unknowns_and_uncertainties.join("; ")}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   {trace.resulting_task_ids.length > 0 && (
                     <div
                       style={{

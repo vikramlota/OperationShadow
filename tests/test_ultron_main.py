@@ -15,7 +15,7 @@ from ultron.schemas.mission import MissionStatus, VehicleID
 from ultron.schemas.commands import Position2D
 from ultron.graph.workflow import build_ultron_graph
 from ultron.simulation.generator import SyntheticDataGenerator
-from ultron.evaluator.updater import update_world_model
+from ultron.world_model.updater import update_world_model
 from ultron.state import UltronState
 
 

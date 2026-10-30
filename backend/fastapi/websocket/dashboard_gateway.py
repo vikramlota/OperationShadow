@@ -30,6 +30,7 @@ import uuid
 from core.logging import get_logger
 from db.models import Event, Mission, ReasoningTrace, Vehicle
 from fastapi import WebSocket, WebSocketDisconnect
+from schemas.detections import DetectionsPushPayload
 from schemas.entities import (
     EventRead,
     MissionDetailRead,
@@ -45,6 +46,7 @@ from schemas.enums import (
     VehicleStatusEnum,
 )
 from schemas.websocket import (
+    DashboardDetectionsEnvelope,
     DashboardEventEnvelope,
     DashboardMissionStatusEnvelope,
     DashboardReasoningTraceEnvelope,
@@ -62,6 +64,7 @@ from sqlalchemy.orm import selectinload
 logger = get_logger("websocket.dashboard")
 
 SnapshotHook = Callable[[], Awaitable[None]]
+DetectionsSnapshotProvider = Callable[[], dict[VehicleIdEnum, DetectionsPushPayload]]
 
 
 @dataclass
@@ -96,6 +99,7 @@ class DashboardGateway:
         send_timeout_seconds: float = 1.0,
         recent_events_limit: int = 50,
         recent_traces_limit: int = 50,
+        detections_provider: DetectionsSnapshotProvider | None = None,
     ) -> None:
         if max_client_queue_size < 1:
             msg = "max_client_queue_size must be >= 1"
@@ -108,6 +112,7 @@ class DashboardGateway:
         self._send_timeout_seconds = send_timeout_seconds
         self._recent_events_limit = recent_events_limit
         self._recent_traces_limit = recent_traces_limit
+        self._detections_provider = detections_provider
 
         self._clients: dict[str, _DashboardClientConnection] = {}
         self._sequence: int = 0
@@ -125,6 +130,13 @@ class DashboardGateway:
     def set_snapshot_transition_hook(self, hook: SnapshotHook | None) -> None:
         """Register an optional test hook invoked mid-snapshot to test snapshot-to-live sync."""
         self._on_during_snapshot_hook = hook
+
+    def set_detections_provider(
+        self,
+        provider: DetectionsSnapshotProvider | None,
+    ) -> None:
+        """Register a callback returning current per-vehicle detection states for snapshots."""
+        self._detections_provider = provider
 
     def _next_sequence(self) -> int:
         self._sequence += 1
@@ -178,11 +190,18 @@ class DashboardGateway:
         if self._on_during_snapshot_hook is not None:
             await self._on_during_snapshot_hook()
 
+        detections_map: dict[VehicleIdEnum, DetectionsPushPayload] = (
+            self._detections_provider()
+            if self._detections_provider is not None
+            else {}
+        )
+
         now = datetime.now(timezone.utc)
         snapshot_payload = DashboardSnapshotPayload(
             generated_at=now,
             current_mission=mission_detail,
             vehicles=vehicles_map,
+            detections=detections_map,
             recent_events=[EventRead.model_validate(e) for e in event_rows],
             recent_reasoning_traces=[
                 ReasoningTraceRead.model_validate(rt) for rt in trace_rows
@@ -207,7 +226,7 @@ class DashboardGateway:
                 timeout=self._send_timeout_seconds,
             )
             return True
-        except ( asyncio.TimeoutError, WebSocketDisconnect, RuntimeError, Exception) as exc:
+        except (asyncio.TimeoutError, WebSocketDisconnect, RuntimeError, Exception) as exc:
             if isinstance(exc, asyncio.TimeoutError):
                 self._evicted_slow_clients += 1
                 logger.warning(
@@ -249,7 +268,7 @@ class DashboardGateway:
             async with session_factory() as session:
                 snapshot_envelope = await self.build_snapshot_envelope(session)
 
-            snapshot_wire = snapshot_envelope.model_dump(mode="json")
+            snapshot_wire = snapshot_envelope.model_dump(mode="json", by_alias=True)
             sent = await self._send_frame_with_timeout(client, snapshot_wire)
             if not sent:
                 return client_id
@@ -342,14 +361,15 @@ class DashboardGateway:
             | DashboardEventEnvelope
             | DashboardReasoningTraceEnvelope
             | DashboardMissionStatusEnvelope
+            | DashboardDetectionsEnvelope
         ),
         *,
         entity_id: str | None = None,
     ) -> int:
         """Validate and enqueue an outbound envelope across all connected dashboard clients."""
-        raw_dict = envelope.model_dump(mode="json")
+        raw_dict = envelope.model_dump(mode="json", by_alias=True)
         validated = validate_dashboard_ws_envelope(raw_dict)
-        wire_dict = validated.model_dump(mode="json")
+        wire_dict = validated.model_dump(mode="json", by_alias=True)
         env_type = str(validated.type)
 
         delivered_count = 0
@@ -464,6 +484,22 @@ class DashboardGateway:
             ),
         )
         return await self.broadcast_envelope(envelope, entity_id=mission_detail.id)
+
+    async def broadcast_detections(
+        self,
+        detections_payload: DetectionsPushPayload,
+    ) -> int:
+        """Construct and broadcast a validated `detections` envelope."""
+        envelope = DashboardDetectionsEnvelope(
+            envelope_id=f"DET-{uuid.uuid4().hex[:8]}",
+            vehicle_id=detections_payload.vehicle_id,
+            sequence=self._next_sequence(),
+            payload=detections_payload,
+        )
+        return await self.broadcast_envelope(
+            envelope,
+            entity_id=detections_payload.vehicle_id.value,
+        )
 
 
 dashboard_gateway = DashboardGateway()

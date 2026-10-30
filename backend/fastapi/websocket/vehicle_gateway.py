@@ -405,10 +405,8 @@ class VehicleGateway:
 
                 msg_type = data.get("message_type") or data.get("type")
                 if msg_type == "telemetry" or "telemetry" in data:
-                    telemetry_data = data.get("telemetry")
-                    tel_data: dict[str, Any] = (
-                        telemetry_data if isinstance(telemetry_data, dict) else data
-                    )
+                    raw_tel = data.get("telemetry")
+                    tel_data: dict[str, Any] = raw_tel if isinstance(raw_tel, dict) else data
                     ts = tel_data.get("timestamp")
                     if isinstance(ts, str):
                         try:
@@ -434,10 +432,8 @@ class VehicleGateway:
                         await vehicle_service.ingest_telemetry(session, stub)
 
                 elif msg_type == "observation" or "observation" in data:
-                    observation_data = data.get("observation")
-                    obs_data: dict[str, Any] = (
-                        observation_data if isinstance(observation_data, dict) else data
-                    )
+                    raw_obs = data.get("observation")
+                    obs_data: dict[str, Any] = raw_obs if isinstance(raw_obs, dict) else data
                     ts = obs_data.get("timestamp")
                     ts_dt = datetime.fromisoformat(ts.replace("Z", "+00:00")) if isinstance(ts, str) else datetime.now(timezone.utc)
                     obs_stub = ObservationPayloadStub(

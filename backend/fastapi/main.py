@@ -2,8 +2,9 @@
 
 Wires the REST API routers (`/mission`, `/vehicle`, `/events`, `/map`, `/emergency-stop`),
 the Dashboard WebSocket Gateway (`/ws/dashboard`), the Emergency Stop Fast Path
-(`VehicleGatewayFastPath`), structured logging, standardized error-response
-handlers, asynchronous SQLite initialization, and clean shutdown.
+(`VehicleGatewayFastPath`), the read-only ROSBridge PerceptionService,
+structured logging, standardized error-response handlers, asynchronous SQLite
+initialization, and clean shutdown.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from pydantic import BaseModel
 from schemas.entities import FloorPlanConfigResponse
 from services.event_service import EventService, event_service
 from services.mission_service import MissionService, mission_service
+from services.perception_service import PerceptionService, perception_service
 from services.scout_control_simulator import ScoutControlSimulator
 from services.scout_serial_writer import ScoutSerialWriter
 from services.vehicle_service import VehicleService, vehicle_service
@@ -51,6 +53,9 @@ class HealthResponse(BaseModel):
     default_vehicle_mode: str
     ultron_is_stub: bool
     vehicles: list[str]
+    ros_enabled: bool = False
+    ros_connection_state: str = "DISABLED"
+    ros_vehicle_id: str | None = None
 
 
 def create_app(
@@ -60,6 +65,7 @@ def create_app(
     mission_svc: MissionService | None = None,
     vehicle_svc: VehicleService | None = None,
     event_svc: EventService | None = None,
+    perception_svc: PerceptionService | None = None,
     dash_gateway: DashboardGateway | None = None,
     veh_gateway: VehicleGateway | None = None,
     estop_fast_path: VehicleGatewayFastPath | None = None,
@@ -75,16 +81,32 @@ def create_app(
     active_event_svc = event_svc or event_service
     active_mission_svc = mission_svc or mission_service
     active_vehicle_svc = vehicle_svc or vehicle_service
+    active_perception_svc = perception_svc or perception_service
+
+    scout_serial_writer = ScoutSerialWriter(
+        port=settings.scout_serial_port,
+        baudrate=settings.scout_serial_baudrate,
+        enabled=settings.scout_serial_enabled,
+        hardware_lockout=settings.hardware_lockout,
+        real_mode=settings.default_vehicle_mode == "real",
+        failsafe_verified=settings.scout_serial_failsafe_verified,
+    )
+    active_scout_control_simulator = ScoutControlSimulator(scout_serial_writer)
 
     active_event_svc.set_gateway(active_gateway)
     active_mission_svc.set_gateway(active_gateway)
     active_vehicle_svc.set_gateway(active_gateway)
+    active_perception_svc.set_gateway(active_gateway)
+    active_perception_svc.set_session_factory(active_session_factory)
+    active_perception_svc.set_agent(active_mission_svc.agent)
+    active_gateway.set_detections_provider(active_perception_svc.get_all_detection_states)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        """Initialize SQLite metadata on startup and clean up WS/vehicle/E-Stop tasks on shutdown."""
+        """Initialize SQLite metadata and ROSBridge subscriber on startup; clean up on shutdown."""
         configure_logging()
         await init_db(db_engine)
+        await active_perception_svc.start()
         await active_scout_control_simulator.start()
         logger.info("Operation Shadow backend initialized.")
 
@@ -106,6 +128,7 @@ def create_app(
             yield
         finally:
             await active_scout_control_simulator.shutdown()
+            await active_perception_svc.stop()
             if rosbridge:
                 await rosbridge.stop()
             await active_estop_fast_path.shutdown()
@@ -127,16 +150,8 @@ def create_app(
     application.state.event_service = active_event_svc
     application.state.mission_service = active_mission_svc
     application.state.vehicle_service = active_vehicle_svc
-    scout_serial_writer = ScoutSerialWriter(
-        port=settings.scout_serial_port,
-        baudrate=settings.scout_serial_baudrate,
-        enabled=settings.scout_serial_enabled,
-        hardware_lockout=settings.hardware_lockout,
-        real_mode=settings.default_vehicle_mode == "real",
-        failsafe_verified=settings.scout_serial_failsafe_verified,
-    )
-    active_scout_control_simulator = ScoutControlSimulator(scout_serial_writer)
     application.state.scout_control_simulator = active_scout_control_simulator
+    application.state.perception_service = active_perception_svc
     if floor_plan_config is not None:
         application.state.floor_plan_config = floor_plan_config
 
@@ -181,6 +196,13 @@ def create_app(
             default_vehicle_mode=settings.default_vehicle_mode,
             ultron_is_stub=active_mission_svc.agent.is_stub_implementation(),
             vehicles=sorted(snapshot.vehicles.keys()),
+            ros_enabled=active_perception_svc.ros_adapter.enabled,
+            ros_connection_state=active_perception_svc.ros_adapter.connection_state.value,
+            ros_vehicle_id=(
+                active_perception_svc.ros_vehicle_id.value
+                if active_perception_svc.ros_vehicle_id is not None
+                else None
+            ),
         )
 
     @application.get("/scout/status", tags=["scout"])

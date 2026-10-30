@@ -1,13 +1,24 @@
 import React, { createContext, useContext, useReducer, type ReactNode } from "react";
 import type {
+  DecisionTracePayload,
+  DetectionCoordinateFrame,
+  DetectionFrameClassification,
+  DetectionObjectPayload,
+  DetectionsPushPayload,
   EmergencyStopResponsePayload,
+  EpistemicStatus,
   EventReadPayload,
   FloorPlanConfigPayload,
+  FreeSpacePayload,
   MissionDetailPayload,
   MissionStatus,
   ObservationReadPayload,
   ReasoningTraceReadPayload,
+  RosConnectionState,
+  SensorHealthPayload,
   TaskReadPayload,
+  TelemetrySource,
+  TrackedObjectPayload,
   VehicleConnectionState,
   VehicleId,
   VehicleMode,
@@ -17,23 +28,35 @@ import type {
 } from "../api/client";
 
 export type {
+  DecisionTracePayload,
+  DetectionCoordinateFrame,
+  DetectionFrameClassification,
+  DetectionObjectPayload,
+  DetectionsPushPayload,
+  EpistemicStatus,
+  FreeSpacePayload,
+  MissionStatus,
+  RosConnectionState,
+  SensorHealthPayload,
+  TelemetrySource,
+  TrackedObjectPayload,
+  VehicleConnectionState,
   VehicleId,
   VehicleMode,
-  VehicleType,
-  VehicleConnectionState,
   VehicleStatus,
-  MissionStatus,
+  VehicleType,
 };
 
 /**
- * WebSocket message envelope types defined in Architecture §5.2 + initial snapshot.
+ * WebSocket message envelope types defined in Architecture §5.2 + initial snapshot + detections.
  */
 export type DashboardEnvelopeType =
   | "snapshot"
   | "telemetry"
   | "event"
   | "reasoning_trace"
-  | "mission_status";
+  | "mission_status"
+  | "detections";
 
 export interface TelemetryPushPayload {
   vehicle_id: VehicleId;
@@ -60,6 +83,7 @@ export interface DashboardSnapshotWirePayload {
   generated_at: string;
   current_mission: MissionDetailPayload | null;
   vehicles: Partial<Record<VehicleId, VehicleReadPayload>>;
+  detections?: Partial<Record<VehicleId, DetectionsPushPayload>>;
   recent_events: EventReadPayload[];
   recent_reasoning_traces: ReasoningTraceReadPayload[];
 }
@@ -88,6 +112,34 @@ export interface VehicleSummaryState {
   lastSequence: number;
 }
 
+export interface VehicleDetectionSummaryState {
+  vehicleId: VehicleId;
+  configuredVehicleId: string | null;
+  telemetrySource: TelemetrySource;
+  actuationLocked: boolean;
+  rosConnectionState: RosConnectionState;
+  topic: string;
+  messageType: string;
+  stamp: number | null;
+  sourceTimestamp: string | null;
+  receivedAt: string | null;
+  clockOffsetSeconds: number | null;
+  frame: DetectionCoordinateFrame | null;
+  frameClassification: DetectionFrameClassification | null;
+  mapProjectionAllowed: boolean;
+  objects: DetectionObjectPayload[];
+  isStale: boolean;
+  staleAfterSeconds: number;
+  hasReceivedFrame: boolean;
+  outOfOrderCount: number;
+  invalidMessageCount: number;
+  lastSequence: number;
+  trackedObjects: TrackedObjectPayload[];
+  sensorHealth: Record<string, SensorHealthPayload>;
+  freeSpace: FreeSpacePayload | null;
+  decisionTraces: DecisionTracePayload[];
+}
+
 export interface DashboardState {
   backendReachable: boolean;
   wsConnected: boolean;
@@ -101,6 +153,7 @@ export interface DashboardState {
   missionStatus: string;
   missionTasks: TaskReadPayload[];
   vehicles: Record<VehicleId, VehicleSummaryState>;
+  detections: Record<VehicleId, VehicleDetectionSummaryState>;
   observations: ObservationReadPayload[];
   events: EventReadPayload[];
   reasoningTraces: ReasoningTraceReadPayload[];
@@ -117,6 +170,8 @@ export type DashboardAction =
   | { type: "HYDRATE_SNAPSHOT"; payload: Partial<DashboardState> }
   | { type: "APPLY_WS_SNAPSHOT"; payload: DashboardSnapshotWirePayload }
   | { type: "APPLY_WS_TELEMETRY"; payload: { telemetry: TelemetryPushPayload; sequence?: number | null } }
+  | { type: "APPLY_WS_DETECTIONS"; payload: { detections: DetectionsPushPayload; sequence?: number | null } }
+  | { type: "SET_DETECTIONS_STALE"; payload: { vehicleId: VehicleId; isStale: boolean } }
   | { type: "APPLY_VEHICLE_STATUS"; payload: VehicleReadPayload }
   | { type: "APPLY_WS_EVENT"; payload: EventReadPayload }
   | { type: "SET_EVENTS"; payload: EventReadPayload[] }
@@ -128,6 +183,7 @@ export type DashboardAction =
   | { type: "SET_EMERGENCY_STOP_RESULT"; payload: EmergencyStopResponsePayload | null };
 
 export const STALE_HEARTBEAT_THRESHOLD_MS = 1500;
+export const DEFAULT_DETECTION_STALE_SECONDS = 2.0;
 
 export function isHeartbeatTimestampStale(
   lastHeartbeat: string | null,
@@ -142,6 +198,207 @@ export function isHeartbeatTimestampStale(
     return false;
   }
   return nowMs - parsed > thresholdMs;
+}
+
+export function isDetectionStreamTimestampStale(
+  receivedAt: string | null,
+  staleAfterSeconds: number = DEFAULT_DETECTION_STALE_SECONDS,
+  nowMs: number = Date.now(),
+): boolean {
+  if (!receivedAt) {
+    return false;
+  }
+  const parsed = Date.parse(receivedAt);
+  if (Number.isNaN(parsed)) {
+    return false;
+  }
+  return nowMs - parsed > staleAfterSeconds * 1000;
+}
+
+export function deriveFrameClassification(
+  frame: string | null,
+  explicitClassification?: DetectionFrameClassification | null,
+  mapProjectionAllowed?: boolean,
+): DetectionFrameClassification | null {
+  if (explicitClassification) {
+    return explicitClassification;
+  }
+  if (!frame) {
+    return null;
+  }
+  if (frame === "oak_rgb_camera_optical_frame") {
+    return "CAMERA_OPTICAL_RELATIVE";
+  }
+  if (frame === "oak_parent_frame") {
+    return "CAMERA_PARENT_RELATIVE";
+  }
+  if (frame === "map") {
+    return mapProjectionAllowed ? "CONFIRMED_MAP" : "UNCONFIRMED_MAP";
+  }
+  return "UNSUPPORTED_FRAME";
+}
+
+function buildDefaultSensorHealth(
+  d: DetectionsPushPayload,
+  computedStale: boolean,
+): Record<string, SensorHealthPayload> {
+  if (d.sensor_health && Object.keys(d.sensor_health).length > 0) {
+    return d.sensor_health;
+  }
+  const camStatus: SensorHealthPayload["status"] =
+    d.ros_connection_state === "DISABLED" && !d.has_received_frame
+      ? "UNAVAILABLE"
+      : d.ros_connection_state !== "CONNECTED"
+        ? "DISCONNECTED"
+        : computedStale
+          ? "STALE"
+          : d.telemetry_source === "rosbridge"
+            ? "CONNECTED"
+            : "SIMULATED";
+
+  return {
+    depth_camera: {
+      sensor_id: "depth_camera",
+      sensor_type: "depth_camera",
+      enabled: d.ros_connection_state !== "DISABLED" || d.has_received_frame,
+      status: camStatus,
+      source_mode: d.telemetry_source === "rosbridge" ? "physical" : "simulated",
+      topic: d.topic,
+      message_type: d.message_type ?? "std_msgs/msg/String",
+      coordinate_frame: d.frame ?? "oak_rgb_camera_optical_frame",
+      vehicle_id: d.configured_vehicle_id ?? null,
+      last_message_timestamp: d.stamp,
+      last_ingested_at: d.received_at ? Date.parse(d.received_at) / 1000 : null,
+      message_frequency_hz: d.has_received_frame && !computedStale ? 5.0 : 0.0,
+      is_stale: computedStale,
+      stale_after_sec: d.stale_after_seconds ?? DEFAULT_DETECTION_STALE_SECONDS,
+      valid_message_count: d.has_received_frame ? 1 : 0,
+      malformed_message_count: d.invalid_message_count ?? 0,
+      duplicate_message_count: 0,
+      out_of_order_count: d.out_of_order_count ?? 0,
+      error_state: null,
+      notes: "Verified /detections_json object stream. Raw depth images not claimed.",
+    },
+    lidar: {
+      sensor_id: "lidar",
+      sensor_type: "lidar",
+      enabled: false,
+      status: "UNAVAILABLE",
+      source_mode: "simulated",
+      topic: "",
+      message_type: "",
+      coordinate_frame: "",
+      vehicle_id: null,
+      last_message_timestamp: null,
+      last_ingested_at: null,
+      message_frequency_hz: 0.0,
+      is_stale: false,
+      stale_after_sec: 2.0,
+      valid_message_count: 0,
+      malformed_message_count: 0,
+      duplicate_message_count: 0,
+      out_of_order_count: 0,
+      error_state: null,
+      notes: "LiDAR topic, message type, frame, and extrinsics unconfirmed by hardware team; marked UNAVAILABLE.",
+    },
+  };
+}
+
+function buildDefaultTrackedObjects(
+  d: DetectionsPushPayload,
+  computedStale: boolean,
+): TrackedObjectPayload[] {
+  if (d.tracked_objects && d.tracked_objects.length > 0) {
+    return d.tracked_objects;
+  }
+  const stampSec = d.stamp ?? Date.now() / 1000;
+  const ingestedSec = d.received_at ? Date.parse(d.received_at) / 1000 : stampSec;
+  return (d.objects ?? []).map((obj, idx) => ({
+    object_id: `OBJ-${String(idx + 1).padStart(3, "0")}`,
+    label: obj.class,
+    position: {
+      x: obj.position.x,
+      y: obj.position.y,
+      z: obj.position.z,
+      range_m: obj.range_m,
+      uncertainty_m: Number(Math.max(0.05, 0.08 * obj.range_m).toFixed(3)),
+    },
+    coordinate_frame: d.frame ?? "oak_rgb_camera_optical_frame",
+    position_uncertainty_m: Number(Math.max(0.05, 0.08 * obj.range_m).toFixed(3)),
+    classification_confidence: obj.score,
+    first_observed_timestamp: stampSec,
+    last_observed_timestamp: stampSec,
+    last_ingested_at: ingestedSec,
+    last_known_source: "depth_camera",
+    vehicle_id: d.configured_vehicle_id ?? null,
+    source_mode: d.telemetry_source === "rosbridge" ? "physical" : "simulated",
+    contributing_observation_ids: [`OBS-CAM-${obj.id}`],
+    contributing_sensor_types: ["depth_camera"],
+    last_detector_object_id: obj.id,
+    tracking_status: computedStale ? "STALE" : "ACTIVE",
+    epistemic_status: computedStale ? "STALE" : "OBSERVED",
+    currently_visible: !computedStale,
+    corroborated_by_multiple_sensors: false,
+    is_obstacle: ["chair", "bench", "box", "obstacle", "wall"].includes(
+      obj.class.toLowerCase(),
+    ),
+    is_hazard: ["fire", "smoke", "hazard"].includes(obj.class.toLowerCase()),
+  }));
+}
+
+export function mapDetectionsPayloadToSummary(
+  d: DetectionsPushPayload,
+  prev?: VehicleDetectionSummaryState,
+  sequence?: number | null,
+): VehicleDetectionSummaryState {
+  const computedStale =
+    d.is_stale ||
+    (d.has_received_frame &&
+      isDetectionStreamTimestampStale(d.received_at, d.stale_after_seconds));
+  const mapAllowed = Boolean(d.map_projection_allowed);
+  const frameClass = deriveFrameClassification(
+    d.frame,
+    d.frame_classification,
+    mapAllowed,
+  );
+  return {
+    vehicleId: d.vehicle_id,
+    configuredVehicleId:
+      d.configured_vehicle_id !== undefined
+        ? d.configured_vehicle_id
+        : (d.telemetry_source === "rosbridge" ? d.vehicle_id : null),
+    telemetrySource: d.telemetry_source,
+    actuationLocked: d.actuation_locked,
+    rosConnectionState: d.ros_connection_state,
+    topic: d.topic,
+    messageType: d.message_type ?? "std_msgs/msg/String",
+    stamp: d.stamp,
+    sourceTimestamp: d.source_timestamp,
+    receivedAt: d.received_at,
+    clockOffsetSeconds: d.clock_offset_seconds ?? null,
+    frame: d.frame,
+    frameClassification: frameClass,
+    mapProjectionAllowed: mapAllowed,
+    objects: d.objects ?? [],
+    isStale: computedStale,
+    staleAfterSeconds: d.stale_after_seconds ?? DEFAULT_DETECTION_STALE_SECONDS,
+    hasReceivedFrame: d.has_received_frame,
+    outOfOrderCount: d.out_of_order_count ?? 0,
+    invalidMessageCount: d.invalid_message_count ?? 0,
+    lastSequence:
+      typeof sequence === "number" ? sequence : (prev?.lastSequence ?? 0),
+    trackedObjects: buildDefaultTrackedObjects(d, computedStale),
+    sensorHealth: buildDefaultSensorHealth(d, computedStale),
+    freeSpace:
+      d.free_space ?? {
+        is_verified_clear: false,
+        free_space_radius_m: null,
+        epistemic_status: "UNKNOWN",
+        reason:
+          "Cannot verify free space: 360° LiDAR geometric coverage is UNAVAILABLE.",
+      },
+    decisionTraces: d.decision_traces ?? prev?.decisionTraces ?? [],
+  };
 }
 
 export const initialDashboardState: DashboardState = {
@@ -169,6 +426,85 @@ export const initialDashboardState: DashboardState = {
       isStale: false,
       activeTaskId: null,
       lastSequence: 0,
+    },
+  },
+  detections: {
+    SCOUT01: {
+      vehicleId: "SCOUT01",
+      configuredVehicleId: null,
+      telemetrySource: "mock",
+      actuationLocked: true,
+      rosConnectionState: "DISABLED",
+      topic: "/detections_json",
+      messageType: "std_msgs/msg/String",
+      stamp: null,
+      sourceTimestamp: null,
+      receivedAt: null,
+      clockOffsetSeconds: null,
+      frame: null,
+      frameClassification: null,
+      mapProjectionAllowed: false,
+      objects: [],
+      isStale: false,
+      staleAfterSeconds: DEFAULT_DETECTION_STALE_SECONDS,
+      hasReceivedFrame: false,
+      outOfOrderCount: 0,
+      invalidMessageCount: 0,
+      lastSequence: 0,
+      trackedObjects: [],
+      sensorHealth: {
+        depth_camera: {
+          sensor_id: "depth_camera",
+          sensor_type: "depth_camera",
+          enabled: false,
+          status: "DISCONNECTED",
+          source_mode: "simulated",
+          topic: "/detections_json",
+          message_type: "std_msgs/msg/String",
+          coordinate_frame: "oak_rgb_camera_optical_frame",
+          vehicle_id: null,
+          last_message_timestamp: null,
+          last_ingested_at: null,
+          message_frequency_hz: 0.0,
+          is_stale: false,
+          stale_after_sec: 2.0,
+          valid_message_count: 0,
+          malformed_message_count: 0,
+          duplicate_message_count: 0,
+          out_of_order_count: 0,
+          error_state: null,
+          notes: "Depth camera object detection stream (/detections_json).",
+        },
+        lidar: {
+          sensor_id: "lidar",
+          sensor_type: "lidar",
+          enabled: false,
+          status: "UNAVAILABLE",
+          source_mode: "simulated",
+          topic: "",
+          message_type: "",
+          coordinate_frame: "",
+          vehicle_id: null,
+          last_message_timestamp: null,
+          last_ingested_at: null,
+          message_frequency_hz: 0.0,
+          is_stale: false,
+          stale_after_sec: 2.0,
+          valid_message_count: 0,
+          malformed_message_count: 0,
+          duplicate_message_count: 0,
+          out_of_order_count: 0,
+          error_state: null,
+          notes: "LiDAR topic, message type, frame, and extrinsics unconfirmed by hardware team; marked UNAVAILABLE.",
+        },
+      },
+      freeSpace: {
+        is_verified_clear: false,
+        free_space_radius_m: null,
+        epistemic_status: "UNKNOWN",
+        reason: "Cannot verify free space: 360° LiDAR geometric coverage is UNAVAILABLE.",
+      },
+      decisionTraces: [],
     },
   },
   observations: [],
@@ -302,6 +638,14 @@ export function dashboardReducer(
         );
       }
 
+      const nextDetections = { ...state.detections };
+      if (snap.detections?.SCOUT01) {
+        nextDetections.SCOUT01 = mapDetectionsPayloadToSummary(
+          snap.detections.SCOUT01,
+          state.detections.SCOUT01,
+        );
+      }
+
       return {
         ...state,
         backendReachable: true,
@@ -310,6 +654,7 @@ export function dashboardReducer(
         missionStatus: snap.current_mission?.status ?? state.missionStatus,
         missionTasks: snap.current_mission?.tasks ?? state.missionTasks,
         vehicles: nextVehicles,
+        detections: nextDetections,
         events: mergeChronologicalEvents([], snap.recent_events),
         reasoningTraces: mergeChronologicalTraces([], snap.recent_reasoning_traces),
       };
@@ -322,7 +667,6 @@ export function dashboardReducer(
         return state;
       }
 
-      // Guard against out-of-order WebSocket frames by sequence or heartbeat timestamp
       if (
         typeof sequence === "number" &&
         prev.lastSequence > 0 &&
@@ -360,6 +704,64 @@ export function dashboardReducer(
         vehicles: {
           ...state.vehicles,
           [telemetry.vehicle_id]: nextVehicle,
+        },
+      };
+    }
+
+    case "APPLY_WS_DETECTIONS": {
+      const { detections, sequence } = action.payload;
+      const prev = state.detections[detections.vehicle_id];
+      if (!prev) {
+        return state;
+      }
+
+      // Reject out-of-order detection frames by source timestamp (`stamp`)
+      if (
+        prev.stamp !== null &&
+        detections.stamp !== null &&
+        detections.stamp < prev.stamp
+      ) {
+        return {
+          ...state,
+          detections: {
+            ...state.detections,
+            [detections.vehicle_id]: {
+              ...prev,
+              outOfOrderCount: prev.outOfOrderCount + 1,
+            },
+          },
+        };
+      }
+
+      const nextDetectionState = mapDetectionsPayloadToSummary(
+        detections,
+        prev,
+        sequence,
+      );
+
+      return {
+        ...state,
+        detections: {
+          ...state.detections,
+          [detections.vehicle_id]: nextDetectionState,
+        },
+      };
+    }
+
+    case "SET_DETECTIONS_STALE": {
+      const { vehicleId, isStale } = action.payload;
+      const prev = state.detections[vehicleId];
+      if (!prev || prev.isStale === isStale) {
+        return state;
+      }
+      return {
+        ...state,
+        detections: {
+          ...state.detections,
+          [vehicleId]: {
+            ...prev,
+            isStale,
+          },
         },
       };
     }

@@ -1,6 +1,7 @@
 /**
  * Typed REST API client and shared backend contracts for Operation Shadow.
- * Consumes the exact FastAPI contracts implemented in Milestones 1–4.
+ * Consumes the exact FastAPI contracts implemented in Milestones 1–6 + ROS 2 Humble Perception
+ * + Evidence-Grounded Multi-Sensor ULTRON Environmental Intelligence.
  */
 
 export const API_BASE_URL: string =
@@ -32,10 +33,48 @@ export type VehicleStatus =
   | "EMERGENCY_STOPPED"
   | "FAULT";
 
+export type TelemetrySource = "mock" | "rosbridge";
+export type RosConnectionState =
+  | "DISABLED"
+  | "DISCONNECTED"
+  | "CONNECTING"
+  | "CONNECTED"
+  | "RECONNECTING"
+  | "ERROR";
+export type DetectionCoordinateFrame =
+  | "oak_rgb_camera_optical_frame"
+  | "oak_parent_frame"
+  | "map"
+  | (string & {});
+
+export type DetectionFrameClassification =
+  | "CAMERA_OPTICAL_RELATIVE"
+  | "CAMERA_PARENT_RELATIVE"
+  | "CONFIRMED_MAP"
+  | "UNCONFIRMED_MAP"
+  | "UNSUPPORTED_FRAME";
+
+export type EpistemicStatus =
+  | "OBSERVED"
+  | "CORROBORATED"
+  | "INFERRED"
+  | "UNKNOWN"
+  | "STALE"
+  | "CONFLICTED";
+
+export type SensorHealthStatus =
+  | "CONNECTED"
+  | "DISCONNECTED"
+  | "UNAVAILABLE"
+  | "STALE"
+  | "ERROR"
+  | "SIMULATED";
+
 export type MissionStatus =
   | "PENDING"
   | "PLANNING"
   | "ACTIVE"
+  | "IN_PROGRESS"
   | "COMPLETED"
   | "ABORTED"
   | "FAILED";
@@ -135,6 +174,156 @@ export interface HealthCheckPayload {
   default_vehicle_mode: string;
   ultron_is_stub: boolean;
   vehicles: string[];
+  ros_enabled?: boolean;
+  ros_connection_state?: RosConnectionState;
+  ros_vehicle_id?: string | null;
+}
+
+export interface DetectionPosition3DPayload {
+  x: number;
+  y: number;
+  z: number;
+  range_m?: number | null;
+  uncertainty_m?: number;
+}
+
+export interface DetectionObjectPayload {
+  id: number;
+  class: string;
+  score: number;
+  position: DetectionPosition3DPayload;
+  range_m: number;
+}
+
+export interface TrackedObjectPayload {
+  object_id: string;
+  label: string;
+  position: DetectionPosition3DPayload;
+  coordinate_frame: string;
+  position_uncertainty_m: number;
+  classification_confidence: number;
+  first_observed_timestamp: number;
+  last_observed_timestamp: number;
+  last_ingested_at: number;
+  last_known_source: string;
+  vehicle_id?: string | null;
+  source_mode: "simulated" | "physical";
+  contributing_observation_ids: string[];
+  contributing_sensor_types: string[];
+  last_detector_object_id?: number | null;
+  tracking_status: "ACTIVE" | "REMEMBERED" | "STALE" | "CONFLICTED" | "LOST";
+  epistemic_status: EpistemicStatus;
+  currently_visible: boolean;
+  corroborated_by_multiple_sensors: boolean;
+  is_obstacle?: boolean;
+  is_hazard?: boolean;
+  fusion_timestamp?: number | null;
+  association_method?: string | null;
+  association_score?: number | null;
+  conflict_details?: string | null;
+}
+
+export interface SensorHealthPayload {
+  sensor_id: string;
+  sensor_type: "depth_camera" | "lidar" | "telemetry" | "synthetic" | string;
+  enabled: boolean;
+  status: SensorHealthStatus;
+  source_mode: "simulated" | "physical";
+  topic: string;
+  message_type: string;
+  coordinate_frame: string;
+  vehicle_id?: string | null;
+  last_message_timestamp: number | null;
+  last_ingested_at: number | null;
+  message_frequency_hz: number;
+  is_stale: boolean;
+  stale_after_sec: number;
+  valid_message_count: number;
+  malformed_message_count: number;
+  duplicate_message_count: number;
+  out_of_order_count: number;
+  error_state: string | null;
+  notes?: string | null;
+}
+
+export interface FreeSpacePayload {
+  is_verified_clear: boolean;
+  free_space_radius_m: number | null;
+  epistemic_status: EpistemicStatus;
+  reason: string;
+  supporting_sensors?: string[];
+  warnings?: string[];
+}
+
+export interface EvidenceReferencePayload {
+  observation_id: string;
+  object_id?: string | null;
+  sensor: string;
+  sensor_type: string;
+  timestamp: number;
+  coordinate_frame: string;
+  confidence?: number | null;
+  epistemic_status: EpistemicStatus;
+  source_mode: "simulated" | "physical";
+}
+
+export interface DecisionTracePayload {
+  trace_id: string;
+  mission_id: string;
+  timestamp: number;
+  trigger: string;
+  environmental_facts_used: string[];
+  inferences_made: string[];
+  unknowns_and_uncertainties: string[];
+  sensor_sources: string[];
+  evidence_references?: EvidenceReferencePayload[];
+  decision_summary: string;
+  rationale: string;
+  safety_validator_passed: boolean;
+  safety_validator_modified_or_rejected: boolean;
+  validation_errors: string[];
+  replanning_triggered: boolean;
+  resulting_task_ids: string[];
+  confidence_level: "high" | "medium" | "low" | "unavailable";
+  is_simulated: boolean;
+}
+
+export interface GroundedEnvironmentalResponsePayload {
+  answer: string;
+  facts: string[];
+  inferences: string[];
+  unknowns: string[];
+  warnings: string[];
+  evidence: EvidenceReferencePayload[];
+  confidence: "high" | "medium" | "low" | "unavailable";
+  source_mode: "simulated" | "physical";
+}
+
+export interface DetectionsPushPayload {
+  vehicle_id: VehicleId;
+  configured_vehicle_id?: string | null;
+  telemetry_source: TelemetrySource;
+  actuation_locked: boolean;
+  ros_connection_state: RosConnectionState;
+  topic: string;
+  message_type?: string;
+  stamp: number | null;
+  source_timestamp: string | null;
+  received_at: string | null;
+  clock_offset_seconds?: number | null;
+  frame: DetectionCoordinateFrame | null;
+  frame_classification?: DetectionFrameClassification | null;
+  map_projection_allowed?: boolean;
+  objects: DetectionObjectPayload[];
+  is_stale: boolean;
+  stale_after_seconds: number;
+  has_received_frame: boolean;
+  out_of_order_count: number;
+  invalid_message_count: number;
+  tracked_objects?: TrackedObjectPayload[];
+  sensor_health?: Record<string, SensorHealthPayload>;
+  free_space?: FreeSpacePayload | null;
+  decision_traces?: DecisionTracePayload[];
 }
 
 export interface TaskReadPayload {
@@ -374,6 +563,18 @@ export async function completeMission(
   );
 }
 
+export async function queryEnvironmentalIntelligence(
+  query: string,
+): Promise<GroundedEnvironmentalResponsePayload> {
+  return requestJson<GroundedEnvironmentalResponsePayload>(
+    "/mission/intelligence/query",
+    {
+      method: "POST",
+      body: JSON.stringify({ query }),
+    },
+  );
+}
+
 export async function fetchVehicleStatus(
   vehicleId: VehicleId,
 ): Promise<VehicleReadPayload> {
@@ -384,6 +585,12 @@ export async function fetchVehicleSensors(
   vehicleId: VehicleId,
 ): Promise<VehicleSensorsPayload> {
   return requestJson<VehicleSensorsPayload>(`/vehicle/${vehicleId}/sensors`);
+}
+
+export async function fetchVehicleDetections(
+  vehicleId: VehicleId,
+): Promise<DetectionsPushPayload> {
+  return requestJson<DetectionsPushPayload>(`/vehicle/${vehicleId}/detections`);
 }
 
 export async function fetchVehicleObservations(

@@ -1,5 +1,16 @@
 """Pydantic schemas, enums, and WebSocket message contracts for Operation Shadow."""
 
+from schemas.detections import (
+    DetectionCoordinateFrameEnum,
+    DetectionFrame,
+    DetectionIdInt,
+    DetectionObject,
+    DetectionPosition3D,
+    DetectionsPushPayload,
+    EpochSecondsFloat,
+    NonNegativeMetres,
+    parse_std_msgs_string_detection_frame,
+)
 from schemas.entities import (
     EmergencyStopRequest,
     EmergencyStopResponse,
@@ -38,7 +49,9 @@ from schemas.enums import (
     EmergencyStopTargetEnum,
     EventCategoryEnum,
     MissionStatusEnum,
+    RosConnectionStateEnum,
     TaskStatusEnum,
+    TelemetrySourceEnum,
     VehicleConnectionStateEnum,
     VehicleIdEnum,
     VehicleModeEnum,
@@ -48,6 +61,7 @@ from schemas.enums import (
 from schemas.errors import ErrorDetail, ErrorResponse
 from schemas.websocket import (
     WS_PROTOCOL_VERSION,
+    DashboardDetectionsEnvelope,
     DashboardEventEnvelope,
     DashboardMissionStatusEnvelope,
     DashboardReasoningTraceEnvelope,
@@ -65,6 +79,7 @@ from schemas.websocket import (
 
 __all__ = [
     "WS_PROTOCOL_VERSION",
+    "DashboardDetectionsEnvelope",
     "DashboardEnvelopeTypeEnum",
     "DashboardEventEnvelope",
     "DashboardMissionStatusEnvelope",
@@ -73,9 +88,16 @@ __all__ = [
     "DashboardSnapshotPayload",
     "DashboardTelemetryEnvelope",
     "DashboardWebSocketEnvelope",
+    "DetectionCoordinateFrameEnum",
+    "DetectionFrame",
+    "DetectionIdInt",
+    "DetectionObject",
+    "DetectionPosition3D",
+    "DetectionsPushPayload",
     "EmergencyStopRequest",
     "EmergencyStopResponse",
     "EmergencyStopTargetEnum",
+    "EpochSecondsFloat",
     "ErrorDetail",
     "ErrorResponse",
     "EventCategoryEnum",
@@ -94,14 +116,17 @@ __all__ = [
     "MissionReplayTimelineEntry",
     "MissionStatusEnum",
     "MissionStatusPushPayload",
+    "NonNegativeMetres",
     "ObservationCreate",
     "ObservationRead",
     "ReasoningTraceCreate",
     "ReasoningTraceRead",
+    "RosConnectionStateEnum",
     "TaskCreate",
     "TaskRead",
     "TaskStatusEnum",
     "TelemetryPushPayload",
+    "TelemetrySourceEnum",
     "VehicleCommandAckResponse",
     "VehicleConnectionStateEnum",
     "VehicleCreate",
@@ -120,5 +145,6 @@ __all__ = [
     "VehicleStatusResponse",
     "VehicleTypeEnum",
     "VehicleUpdate",
+    "parse_std_msgs_string_detection_frame",
     "validate_dashboard_ws_envelope",
 ]

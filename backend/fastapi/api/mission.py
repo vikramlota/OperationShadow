@@ -1,11 +1,12 @@
-"""Mission REST endpoints (§3, §7: POST /mission, GET /mission/{id}, GET /mission/{id}/replay)."""
+"""Mission REST endpoints (§3, §7: POST /mission, GET /mission/{id}, GET /mission/{id}/replay, and ULTRON environmental intelligence)."""
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from db.session import get_db_session
 from fastapi import APIRouter, BackgroundTasks, Depends, Request
+from pydantic import BaseModel, Field
 from schemas.entities import (
     MissionCreateRequest,
     MissionCreateResponse,
@@ -17,6 +18,12 @@ from services.tts import speak_rationale
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/mission", tags=["mission"])
+
+
+class EnvironmentalQueryRequest(BaseModel):
+    """Request payload for querying ULTRON's evidence-grounded environmental intelligence."""
+
+    query: str = Field(min_length=1, max_length=1000)
 
 
 def get_mission_service(request: Request) -> MissionService:
@@ -37,6 +44,55 @@ async def create_mission_endpoint(
     if rationale:
         background_tasks.add_task(speak_rationale, rationale)
     return response
+
+
+@router.get("/intelligence/snapshot")
+async def get_environmental_intelligence_snapshot_endpoint(
+    service: Annotated[MissionService, Depends(get_mission_service)],
+) -> dict[str, Any]:
+    """Return structured World Model snapshot, tracked objects, sensor health, and decision traces."""
+    agent = service.agent
+    if hasattr(agent, "get_environment_snapshot_model"):
+        snap = agent.get_environment_snapshot_model()
+        world_obj = getattr(agent, "world", None)
+        traces = (
+            [dt.model_dump(mode="json") for dt in world_obj.environment.decision_traces]
+            if world_obj is not None
+            else []
+        )
+        out = snap.model_dump(mode="json")
+        out["decision_traces"] = traces
+        return out
+    wm_snap = await agent.get_world_model_snapshot()
+    return {
+        "is_stub": wm_snap.is_stub,
+        "active_mission_id": wm_snap.active_mission_id,
+        "vehicles": wm_snap.vehicles,
+        "observations": wm_snap.observations,
+        "decision_traces": [],
+    }
+
+
+@router.post("/intelligence/query")
+async def query_environmental_intelligence_endpoint(
+    payload: EnvironmentalQueryRequest,
+    service: Annotated[MissionService, Depends(get_mission_service)],
+) -> dict[str, Any]:
+    """Answer an environmental question using ULTRON's evidence-grounded WorldModelTools."""
+    agent = service.agent
+    if hasattr(agent, "query_environment"):
+        res = agent.query_environment(payload.query)
+        return res.model_dump(mode="json")
+    return {
+        "answer": "Cannot assess environment: ULTRON is running in minimal stub mode without WorldModelTools.",
+        "facts": [],
+        "inferences": [],
+        "unknowns": ["ULTRON stub mode active."],
+        "warnings": [],
+        "evidence": [],
+        "confidence": "unavailable",
+        "source_mode": "simulated",
+    }
 
 
 @router.get("/{mission_id}", response_model=MissionDetailRead)
@@ -67,4 +123,3 @@ async def complete_mission_endpoint(
 ) -> MissionDetailRead:
     """Complete an active simulated mission and finalize its tasks."""
     return await service.complete_mission(session, mission_id)
-

@@ -13,7 +13,7 @@ from ultron.schemas.world import (
 from ultron.schemas.mission import MissionStatus
 from ultron.schemas.commands import Position2D
 from ultron.graph.workflow import build_ultron_graph
-from ultron.simulation.mock_vehicles import SimulationHarness
+from ultron.simulation.mock_vehicle import SimulationHarness
 from ultron.state import UltronState
 
 

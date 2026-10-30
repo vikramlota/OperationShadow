@@ -1,20 +1,19 @@
-import os
 from pathlib import Path
 
 
 def test_trd_section_26_repository_layout():
     """
-    Verifies that the root workspace strictly satisfies TRD v2.0 §26 repository layout.
+    Verifies that the root workspace strictly satisfies TRD v2.0 §26 repository layout
+    and segregated hardware/frontend/backend structure.
     """
     root = Path(__file__).resolve().parent.parent
 
-    # Top-level directories specified in TRD §26
+    # Top-level directories
     expected_top_level = [
         "ultron",
-        "scout",
-        "firmware",
+        "hardware",
         "backend",
-        "dashboard",
+        "frontend",
         "configs",
         "tests",
         "docs",
@@ -33,18 +32,26 @@ def test_trd_section_26_repository_layout():
         "communication",
         "safety",
         "simulation",
+        "graph",
+        "schemas",
     ]
     for subdir in expected_ultron_dirs:
         dir_path = root / "ultron" / subdir
         assert dir_path.is_dir(), f"Expected ultron subdirectory '{subdir}' missing"
 
-    # scout subdirectories specified in TRD §26
+    # scout subdirectories inside hardware/scout (and root symlink if present)
     for subdir in ["navigation", "sensors", "communication"]:
-        assert (root / "scout" / subdir).is_dir(), f"Expected scout subdirectory '{subdir}' missing"
+        assert (root / "hardware" / "scout" / subdir).is_dir(), f"Expected hardware/scout/'{subdir}' missing"
 
-    # firmware subdirectories specified in TRD §26
+    # hawk subdirectories inside hardware/hawk per TRD §26
+    for subdir in ["flight_interface", "sensors", "communication"]:
+        assert (root / "hardware" / "hawk" / subdir).is_dir(), f"Expected hardware/hawk/'{subdir}' missing"
+
+    # firmware subdirectories inside hardware/firmware/esp32
     for subdir in ["motors", "sensors", "safety"]:
-        assert (root / "firmware" / "esp32" / subdir).is_dir(), f"Expected firmware/esp32/'{subdir}' missing"
+        assert (root / "hardware" / "firmware" / "esp32" / subdir).is_dir(), (
+            f"Expected hardware/firmware/esp32/'{subdir}' missing"
+        )
 
     # product documents in docs/
     for doc in [
@@ -74,5 +81,5 @@ def test_segregated_frontend_backend_hardware_layout():
 
     assert (root / "hardware").is_dir(), "Expected top-level 'hardware/' directory"
     assert (root / "hardware" / "scout").is_dir(), "Expected hardware/scout directory"
+    assert (root / "hardware" / "hawk").is_dir(), "Expected hardware/hawk directory"
     assert (root / "hardware" / "firmware").is_dir(), "Expected hardware/firmware directory"
-

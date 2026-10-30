@@ -664,7 +664,7 @@ class MockFleetSimulator:
         self._hawk = MockVehicleAdapter(
             hawk_config
             or MockVehicleConfig(
-                vehicle_id="HAWK01",
+                vehicle_id="SCOUT01",
                 vehicle_type="aerial",
                 initial_x=0.0,
                 initial_y=0.0,

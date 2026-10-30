@@ -1,7 +1,7 @@
 from typing import Optional
 from ultron.schemas.mission import MissionPlan
 from ultron.schemas.world import WorldModel
-from ultron.evaluator.triggers import check_replanning_triggers
+from ultron.replanner.triggers import check_replanning_triggers
 from ultron.planner.engine import invoke_gemini_planner
 
 

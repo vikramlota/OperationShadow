@@ -1,7 +1,7 @@
 [project]
 name = "operation-shadow-backend"
 version = "0.1.0"
-description = "Operation Shadow FastAPI service layer, SQLite persistence, WebSocket gateways, and ULTRON stub adapter"
+description = "Operation Shadow FastAPI service layer, SQLite persistence, WebSocket gateways, ROSBridge perception adapter, and ULTRON stub adapter"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115.0,<1.0.0",
@@ -15,6 +15,7 @@ dependencies = [
     "google-genai>=2.28.0,<3.0.0",
     "elevenlabs>=2.75.0,<3.0.0",
     "pyserial>=3.5,<4.0.0",
+    "roslibpy>=1.6.0,<2.0.0",
 ]
 
 [project.optional-dependencies]
@@ -37,3 +38,7 @@ mypy_path = "fastapi:.:.."
 strict = true
 explicit_package_bases = true
 plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["roslibpy", "roslibpy.*"]
+ignore_missing_imports = true

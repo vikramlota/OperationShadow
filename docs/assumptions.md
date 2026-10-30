@@ -9,8 +9,9 @@ The repository contains the authoritative specification documents:
 - **Present**: `docs/Operation Shadow — ULTRON Agent Architecture.md` (Version 1.0 Agent Architecture)
 - **Present**: `docs/ui-design-spec.md` (Military tactical command-and-control visual specification)
 - **Present**: `docs/implementation-plan.md` (Implementation milestones and verification criteria)
+- **Present**: `docs/rosbridge-integration.md` (Live Rover ROSBridge Perception Integration specification)
 
-The entire repository tree has been structured to adhere strictly to TRD v2.0 §26 (`ultron/`, `scout/`, `hawk/`, `firmware/esp32/`, `backend/fastapi/`, `dashboard/react/`, `configs/`, `tests/`, and `docs/`).
+The entire repository tree has been structured to adhere strictly to TRD v2.0 §26 (`ultron/`, `hardware/scout/`, `hardware/hawk/`, `hardware/firmware/esp32/`, `backend/fastapi/`, `frontend/`, `configs/`, `tests/`, and `docs/`).
 
 Hardware & physical IoT wiring details (motor driver pinouts, companion computer USB/serial ports) remain isolated behind safety controllers, while all software wire frames, WebSocket topics, and safety protocols adhere to TRD v2.0 §7, §19, and §20. Real hardware control remains guarded by `SHADOW_HARDWARE_LOCKOUT=true`.
 
@@ -19,7 +20,7 @@ Hardware & physical IoT wiring details (motor driver pinouts, companion computer
 1. **Backend Database & ORM**:
    - **Decision**: SQLAlchemy 2.0 asynchronous ORM (`AsyncSession`, `create_async_engine`) with `aiosqlite` driver and `PRAGMA foreign_keys=ON` enforced on every SQLite connection.
 2. **Frontend Stack & State Management**:
-   - **Decision**: Vite + React 19 + TypeScript, using React Context and `useReducer` (`dashboard/react/src/state/store.tsx`) for shared state.
+   - **Decision**: Vite + React 19 + TypeScript, using React Context and `useReducer` (`frontend/src/state/store.tsx`) for shared state.
 3. **Isolated ULTRON Stub & Vehicle Simulator Package (`backend/ultron_stub/`)**:
    - **Decision**: Define `UltronAgentPort` and `VehicleAdapterPort` (`typing.Protocol` interfaces) in `backend/ultron_stub/interface.py` and `backend/ultron_stub/vehicle_adapter.py`, backed by `StubUltronAgent`, `LockedRealVehicleAdapter`, and `MockFleetSimulator` (`MockVehicleAdapter` for `SCOUT01` and `HAWK01`).
 4. **Python Module Path Resolution for `backend/fastapi/`**:
@@ -57,8 +58,30 @@ Hardware & physical IoT wiring details (motor driver pinouts, companion computer
 1. **Cold-Boot Stale Connection Reset (`db/session.py:seed_default_vehicles`)**:
    - When `init_db()` runs on application startup, any existing `Vehicle` rows in SQLite whose `connection` was persisted as `"CONNECTED"` by a prior process are automatically reset to `connection="DISCONNECTED"` (and `status="IDLE"` if previously `"ACTIVE"` or `"EXECUTING"`). This guarantees that restarting the backend never leaves stale connections reported as healthy before a fresh heartbeat is received.
 2. **Simulated Mission Completion Helper (`POST /mission/{id}/complete`)**:
-   - Because the real ULTRON autonomous completion engine is not yet specified (ULTRON Agent Architecture Document is missing), `MissionService.complete_mission()` and `POST /mission/{id}/complete` (along with the **Complete Simulated Mission** button in `MissionPanel.tsx`) are provided as an explicit simulation-only helper to transition an active simulated mission to `COMPLETED`, mark its assigned tasks `COMPLETED`, record a completion event and stub reasoning trace, and broadcast updates over `/ws/dashboard`.
+   - Because the real ULTRON autonomous completion engine is not yet specified, `MissionService.complete_mission()` and `POST /mission/{id}/complete` (along with the **Complete Simulated Mission** button in `MissionPanel.tsx`) are provided as an explicit simulation-only helper to transition an active simulated mission to `COMPLETED`, mark its assigned tasks `COMPLETED`, record a completion event and stub reasoning trace, and broadcast updates over `/ws/dashboard`.
 3. **Measured Performance & Latency Scope (`test_milestone6_e2e_and_load.py`)**:
    - **Telemetry Ingest-to-Dashboard Broadcast Latency** (`n = 50` updates across 2 simulated vehicles at 250ms cadence with active WebSocket subscriber): **median `0.305 ms`, max `1.249 ms`** (well below the `< 500 ms` target in §11).
    - **Simulated Emergency-Stop Fast-Path Dispatch Latency** (`n = 20` runs targeting `ALL` vehicles): **median `0.018 ms`, max `0.033 ms`** in-process handler-to-adapter dispatch, and **median `0.276 ms`, max `4.844 ms`** full ASGI HTTP roundtrip (well below the `< 100 ms` target in §10 and §11).
    - **Excluded Physical Scope**: These measurements cover backend Python/ASGI execution, SQLite checkpointing, and WebSocket frame delivery on the local machine; they exclude physical Wi-Fi radio propagation, ESP32/Raspberry Pi companion-computer serial links, and physical motor/ESC braking.
+
+## 7. ROS 2 Humble Live Perception Integration & Unresolved Hardware Confirmations
+
+1. **Confirmed ROS 2 Humble Environment & Message Contract**:
+   - The rover runs **ROS 2 Humble** on Ubuntu with `rosbridge_server` on port `9090`, publishing JSON strings on `/detections_json` (`std_msgs/msg/String`, up to `5 Hz`) in coordinate frame `oak_rgb_camera_optical_frame` (parent frame: `oak_parent_frame`).
+   - `parse_std_msgs_string_detection_frame()` accepts both ROS `sec + nanosec / 1e9` stamp objects and Unix epoch floats (`stamp`), records local UTC receive time (`received_at`) independently, and calculates `clock_offset_seconds` strictly for diagnostics without rewriting `stamp`.
+   - Object `id` values are treated strictly as frame-local detection indices (`id_is_frame_local_only=True`), not persistent cross-frame track IDs.
+2. **Coordinate-Frame Safety & Replaceable Transform Interface (`CoordinateTransformPort`)**:
+   - The TF tree previously included `map → odom → oak_parent_frame` (`/tf`, `/tf_static`), but the live mapping/odometry transform and camera-to-LiDAR extrinsics have **not** been validated.
+   - All `oak_rgb_camera_optical_frame` (`CAMERA_OPTICAL_RELATIVE`) and `oak_parent_frame` (`CAMERA_PARENT_RELATIVE`) detections are treated as camera/frame-relative (`map_projection_allowed=False`) and are **never** plotted on `FloorMap.tsx` or confused with rover position.
+   - `map` detections are gated behind `SHADOW_ROS_MAP_FRAME_CONFIRMED=false` (`UNCONFIRMED_MAP`) until calibration is verified.
+   - Unrecognized coordinate frames are preserved verbatim across backend schemas, SQLite `OBSERVATIONS`, WebSocket envelopes, and the React UI (`UNSUPPORTED_FRAME`, `map_projection_allowed=False`).
+   - `CoordinateTransformPort` and `UnvalidatedCoordinateTransformStub` in `backend/fastapi/schemas/detections.py` define the replaceable interface for future validated TF/extrinsic transforms.
+3. **Unset Default Vehicle Identity & Read-Only Safety**:
+   - `SHADOW_ROS_ENABLED=false` and `SHADOW_ROS_VEHICLE_ID=""` remain unset by default until the hardware team confirms whether the physical rover is designated `SCOUT01`.
+   - `RosBridgeAdapter` is strictly read-only (`subscribe`/`unsubscribe` only) and never enables physical vehicle control (`SHADOW_HARDWARE_LOCKOUT=true` and `LockedRealVehicleAdapter` remain enforced).
+4. **Deferred Optional Topics & Outstanding Hardware Confirmations**:
+   - **Vehicle Designation**: Confirm whether this ROS 2 Humble rover should be assigned `SHADOW_ROS_VEHICLE_ID=SCOUT01`.
+   - **TF & Extrinsics (`/tf`, `/tf_static`)**: Validate the `map → odom → oak_parent_frame → oak_rgb_camera_optical_frame` chain and camera-to-LiDAR extrinsics before enabling `SHADOW_ROS_MAP_FRAME_CONFIRMED=true`.
+   - **`/oak/rgb/image_raw/compressed` (expected `sensor_msgs/msg/CompressedImage`)**: Confirm via `ros2 topic info` and sample messages, and verify whether a direct HTTP MJPEG stream (`CameraFeed.tsx`) will be used instead of WebSocket forwarding.
+   - **`/oak/vio/odometry` (expected `nav_msgs/msg/Odometry`)**: Confirm via `ros2 topic info`, sample messages, and coordinate alignment with `GET /map`.
+

@@ -5,7 +5,7 @@ Explicitly documented values from `Operation Shadow — Backend & Frontend Archi
 - Emergency Stop targets: `ALL`, `SCOUT01`, `HAWK01` (§7)
 - Vehicle operating modes: `real`, `simulated` (§6)
 - Vehicle status/connection timeout state: `UNKNOWN` (§5.1)
-- Dashboard WebSocket envelope types: `telemetry`, `event`, `reasoning_trace`, `mission_status` (§5.2)
+- Dashboard WebSocket envelope types: `telemetry`, `event`, `reasoning_trace`, `mission_status`, `detections` (§5.2)
 
 Provisional values for states not exhaustively enumerated in the Backend & Frontend
 Architecture document are marked below and recorded in `docs/assumptions.md`.
@@ -34,6 +34,47 @@ class VehicleModeEnum(StrEnum):
 
     SIMULATED = "simulated"
     REAL = "real"
+
+
+class TelemetrySourceEnum(StrEnum):
+    """Source of perception/telemetry data (strictly separated from actuator control mode)."""
+
+    MOCK = "mock"
+    ROSBRIDGE = "rosbridge"
+
+
+class RosConnectionStateEnum(StrEnum):
+    """Connection states for the read-only ROSBridge perception subscriber."""
+
+    DISABLED = "DISABLED"
+    DISCONNECTED = "DISCONNECTED"
+    CONNECTING = "CONNECTING"
+    CONNECTED = "CONNECTED"
+    RECONNECTING = "RECONNECTING"
+    ERROR = "ERROR"
+
+
+class DetectionCoordinateFrameEnum(StrEnum):
+    """Known coordinate frames for rover object detections (`/detections_json`).
+
+    Note: Incoming frames may also contain unrecognized frame strings; `DetectionFrame.frame`
+    preserves the exact incoming string verbatim while classifying it via
+    `DetectionFrameClassificationEnum`.
+    """
+
+    OAK_RGB_CAMERA_OPTICAL_FRAME = "oak_rgb_camera_optical_frame"
+    OAK_PARENT_FRAME = "oak_parent_frame"
+    MAP = "map"
+
+
+class DetectionFrameClassificationEnum(StrEnum):
+    """Coordinate-frame safety classification for UI display and map-projection gating."""
+
+    CAMERA_OPTICAL_RELATIVE = "CAMERA_OPTICAL_RELATIVE"
+    CAMERA_PARENT_RELATIVE = "CAMERA_PARENT_RELATIVE"
+    CONFIRMED_MAP = "CONFIRMED_MAP"
+    UNCONFIRMED_MAP = "UNCONFIRMED_MAP"
+    UNSUPPORTED_FRAME = "UNSUPPORTED_FRAME"
 
 
 class VehicleTypeEnum(StrEnum):
@@ -106,9 +147,10 @@ class EventCategoryEnum(StrEnum):
 
 
 class DashboardEnvelopeTypeEnum(StrEnum):
-    """Documented dashboard WebSocket message types (§5.2)."""
+    """Documented dashboard WebSocket message types (§5.2) plus perception detections."""
 
     TELEMETRY = "telemetry"
     EVENT = "event"
     REASONING_TRACE = "reasoning_trace"
     MISSION_STATUS = "mission_status"
+    DETECTIONS = "detections"

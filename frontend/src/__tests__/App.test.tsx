@@ -963,4 +963,437 @@ describe("Operation Shadow Milestone 5 & 6 Tactical Command Dashboard", () => {
     });
     expect(screen.getByText(/M003 \/\/ COMPLETED/i)).toBeInTheDocument();
   });
+
+  // 14. ROS 2 Humble Perception integration: camera-relative oak_rgb_camera_optical_frame & oak_parent_frame,
+  // unsupported/unknown frames, unconfirmed vs confirmed map frame, empty, stale & disconnected states
+  it("renders oak_rgb_camera_optical_frame and oak_parent_frame in camera-relative panel without map plotting, flags unsupported frames, and distinguishes all 6 stream states", async () => {
+    render(
+      <DashboardProvider>
+        <App enableWebSocket={true} />
+      </DashboardProvider>,
+    );
+
+    expect(MockWebSocket.instances.length).toBe(1);
+    const ws = MockWebSocket.instances[0];
+
+    // State 1: Disconnected state via snapshot
+    act(() => {
+      ws.triggerOpen();
+      ws.triggerMessage({
+        type: "snapshot",
+        protocol_version: "1.0",
+        sequence: 1,
+        payload: {
+          protocol_version: "1.0",
+          generated_at: new Date().toISOString(),
+          current_mission: null,
+          vehicles: {
+            SCOUT01: {
+              id: "SCOUT01",
+              vehicle_type: "ground",
+              status: "ACTIVE",
+              battery: 90.0,
+              position_x: 2.0,
+              position_y: 2.0,
+              position_alt: 0.0,
+              connection: "CONNECTED",
+              mode: "simulated",
+              last_heartbeat: new Date().toISOString(),
+            },
+          },
+          detections: {
+            SCOUT01: {
+              vehicle_id: "SCOUT01",
+              configured_vehicle_id: "SCOUT01",
+              telemetry_source: "rosbridge",
+              actuation_locked: true,
+              ros_connection_state: "DISCONNECTED",
+              topic: "/detections_json",
+              message_type: "std_msgs/msg/String",
+              stamp: null,
+              source_timestamp: null,
+              received_at: null,
+              frame: null,
+              frame_classification: null,
+              map_projection_allowed: false,
+              objects: [],
+              is_stale: false,
+              stale_after_seconds: 2.0,
+              has_received_frame: false,
+              out_of_order_count: 0,
+              invalid_message_count: 0,
+            },
+          },
+          recent_events: [],
+          recent_reasoning_traces: [],
+        },
+      });
+    });
+
+    expect(
+      screen.getByTestId("perception-source-badge"),
+    ).toHaveTextContent(/LIVE ROS PERCEPTION/i);
+    expect(
+      screen.getByTestId("perception-actuation-badge"),
+    ).toHaveTextContent(/PHYSICAL ACTUATION LOCKED/i);
+    expect(
+      screen.getByTestId("perception-state-disconnected"),
+    ).toBeInTheDocument();
+
+    // State 2: Connected but awaiting first detection message
+    act(() => {
+      ws.triggerMessage({
+        type: "detections",
+        sequence: 2,
+        payload: {
+          vehicle_id: "SCOUT01",
+          configured_vehicle_id: "SCOUT01",
+          telemetry_source: "rosbridge",
+          actuation_locked: true,
+          ros_connection_state: "CONNECTED",
+          topic: "/detections_json",
+          message_type: "std_msgs/msg/String",
+          stamp: null,
+          source_timestamp: null,
+          received_at: null,
+          frame: null,
+          frame_classification: null,
+          map_projection_allowed: false,
+          objects: [],
+          is_stale: false,
+          stale_after_seconds: 2.0,
+          has_received_frame: false,
+          out_of_order_count: 0,
+          invalid_message_count: 0,
+        },
+      });
+    });
+    expect(screen.getByTestId("perception-state-awaiting")).toBeInTheDocument();
+
+    // State 4A: Live `oak_rgb_camera_optical_frame` detections -> displayed in camera-relative panel, NEVER plotted on SVG floor map
+    const nowIso = new Date().toISOString();
+    act(() => {
+      ws.triggerMessage({
+        type: "detections",
+        sequence: 3,
+        payload: {
+          vehicle_id: "SCOUT01",
+          configured_vehicle_id: "SCOUT01",
+          telemetry_source: "rosbridge",
+          actuation_locked: true,
+          ros_connection_state: "CONNECTED",
+          topic: "/detections_json",
+          message_type: "std_msgs/msg/String",
+          stamp: 1793363063.737,
+          source_timestamp: "2026-10-30T12:00:00Z",
+          received_at: nowIso,
+          frame: "oak_rgb_camera_optical_frame",
+          frame_classification: "CAMERA_OPTICAL_RELATIVE",
+          map_projection_allowed: false,
+          objects: [
+            {
+              id: 0,
+              class: "person",
+              score: 0.95,
+              position: { x: 0.12, y: -0.02, z: 0.65 },
+              range_m: 0.65,
+            },
+          ],
+          is_stale: false,
+          stale_after_seconds: 2.0,
+          has_received_frame: true,
+          out_of_order_count: 0,
+          invalid_message_count: 0,
+        },
+      });
+    });
+
+    expect(
+      screen.getByTestId("perception-camera-optical-frame-list"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("perception-camera-optical-object-0"),
+    ).toHaveTextContent(/#0 PERSON/i);
+    expect(
+      screen.getByTestId("perception-camera-optical-object-0"),
+    ).toHaveTextContent(/CONF: 95%/i);
+    expect(
+      screen.getByTestId("perception-camera-optical-object-0"),
+    ).toHaveTextContent(/FRAME: oak_rgb_camera_optical_frame/i);
+    // Must NOT plot camera-optical detections on the global SVG floor map
+    expect(
+      screen.queryByTestId("map-detection-marker-0"),
+    ).not.toBeInTheDocument();
+
+    // State 4B: Frame-relative `oak_parent_frame` detections -> distinct from optical frame, NEVER plotted on SVG floor map
+    act(() => {
+      ws.triggerMessage({
+        type: "detections",
+        sequence: 4,
+        payload: {
+          vehicle_id: "SCOUT01",
+          configured_vehicle_id: "SCOUT01",
+          telemetry_source: "rosbridge",
+          actuation_locked: true,
+          ros_connection_state: "CONNECTED",
+          topic: "/detections_json",
+          message_type: "std_msgs/msg/String",
+          stamp: 1793363064.5,
+          source_timestamp: "2026-10-30T12:00:01Z",
+          received_at: new Date().toISOString(),
+          frame: "oak_parent_frame",
+          frame_classification: "CAMERA_PARENT_RELATIVE",
+          map_projection_allowed: false,
+          objects: [
+            {
+              id: 3,
+              class: "chair",
+              score: 0.91,
+              position: { x: 0.8, y: -0.2, z: 1.1 },
+              range_m: 1.36,
+            },
+          ],
+          is_stale: false,
+          stale_after_seconds: 2.0,
+          has_received_frame: true,
+          out_of_order_count: 0,
+          invalid_message_count: 0,
+        },
+      });
+    });
+
+    expect(
+      screen.getByTestId("perception-camera-frame-list"),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("perception-camera-object-3")).toHaveTextContent(
+      /#3 CHAIR/i,
+    );
+    expect(
+      screen.queryByTestId("map-detection-marker-3"),
+    ).not.toBeInTheDocument();
+
+    // State 6: Unsupported / unknown coordinate frame -> preserved verbatim and flagged with warning
+    act(() => {
+      ws.triggerMessage({
+        type: "detections",
+        sequence: 5,
+        payload: {
+          vehicle_id: "SCOUT01",
+          configured_vehicle_id: "SCOUT01",
+          telemetry_source: "rosbridge",
+          actuation_locked: true,
+          ros_connection_state: "CONNECTED",
+          topic: "/detections_json",
+          message_type: "std_msgs/msg/String",
+          stamp: 1793363064.8,
+          source_timestamp: "2026-10-30T12:00:01.800Z",
+          received_at: new Date().toISOString(),
+          frame: "custom_lidar_frame",
+          frame_classification: "UNSUPPORTED_FRAME",
+          map_projection_allowed: false,
+          objects: [
+            {
+              id: 8,
+              class: "cone",
+              score: 0.85,
+              position: { x: 1.5, y: 0.5, z: 0.0 },
+              range_m: 1.58,
+            },
+          ],
+          is_stale: false,
+          stale_after_seconds: 2.0,
+          has_received_frame: true,
+          out_of_order_count: 0,
+          invalid_message_count: 0,
+        },
+      });
+    });
+    expect(
+      screen.getByTestId("perception-state-unsupported-frame"),
+    ).toHaveTextContent(/UNSUPPORTED COORDINATE FRAME \[custom_lidar_frame\]/i);
+    expect(
+      screen.queryByTestId("map-detection-marker-8"),
+    ).not.toBeInTheDocument();
+
+    // State 3: Live stream with empty objects array (`objects: []`) -> shows 0 objects
+    act(() => {
+      ws.triggerMessage({
+        type: "detections",
+        sequence: 6,
+        payload: {
+          vehicle_id: "SCOUT01",
+          configured_vehicle_id: "SCOUT01",
+          telemetry_source: "rosbridge",
+          actuation_locked: true,
+          ros_connection_state: "CONNECTED",
+          topic: "/detections_json",
+          message_type: "std_msgs/msg/String",
+          stamp: 1793363065.0,
+          source_timestamp: "2026-10-30T12:00:02Z",
+          received_at: new Date().toISOString(),
+          frame: "oak_rgb_camera_optical_frame",
+          frame_classification: "CAMERA_OPTICAL_RELATIVE",
+          map_projection_allowed: false,
+          objects: [],
+          is_stale: false,
+          stale_after_seconds: 2.0,
+          has_received_frame: true,
+          out_of_order_count: 0,
+          invalid_message_count: 0,
+        },
+      });
+    });
+    expect(screen.getByTestId("perception-state-empty")).toBeInTheDocument();
+
+    // State 5: Stale detection stream (`is_stale: true`) -> shows DETECTION STREAM STALE while SCOUT01 remains CONNECTED
+    act(() => {
+      ws.triggerMessage({
+        type: "detections",
+        sequence: 7,
+        payload: {
+          vehicle_id: "SCOUT01",
+          configured_vehicle_id: "SCOUT01",
+          telemetry_source: "rosbridge",
+          actuation_locked: true,
+          ros_connection_state: "CONNECTED",
+          topic: "/detections_json",
+          message_type: "std_msgs/msg/String",
+          stamp: 1793363066.0,
+          source_timestamp: "2026-10-30T12:00:03Z",
+          received_at: "2026-10-30T11:50:00Z",
+          frame: "oak_rgb_camera_optical_frame",
+          frame_classification: "CAMERA_OPTICAL_RELATIVE",
+          map_projection_allowed: false,
+          objects: [
+            {
+              id: 5,
+              class: "person",
+              score: 0.9,
+              position: { x: 2.0, y: 2.0, z: 0.5 },
+              range_m: 1.0,
+            },
+          ],
+          is_stale: true,
+          stale_after_seconds: 2.0,
+          has_received_frame: true,
+          out_of_order_count: 0,
+          invalid_message_count: 0,
+        },
+      });
+    });
+    expect(screen.getByTestId("perception-state-stale")).toHaveTextContent(
+      /DETECTION STREAM STALE/i,
+    );
+    expect(
+      screen.queryByTestId("map-detection-marker-5"),
+    ).not.toBeInTheDocument();
+    // SCOUT01 vehicle card remains CONNECTED (not marked UNKNOWN by stale perception)
+    const scoutCard = screen.getByRole("article", { name: "Vehicle SCOUT01" });
+    expect(within(scoutCard).getByText("CONNECTED")).toBeInTheDocument();
+  });
+
+  // 15. Evidence Inspector, Sensor Status Strip (LiDAR UNAVAILABLE), and ULTRON Environmental Query
+  it("displays sensor status (depth camera + LiDAR UNAVAILABLE), interactive evidence inspector, and answers grounded environmental queries", async () => {
+    const querySpy = vi
+      .spyOn(apiClient, "queryEnvironmentalIntelligence")
+      .mockResolvedValueOnce({
+        answer:
+          "[OBJ-001] 'person' detected at 0.65m (pos=(0.12, -0.02, 0.65)m in 'oak_rgb_camera_optical_frame').",
+        facts: ["[OBJ-001] 'person' detected at 0.65m"],
+        inferences: [],
+        unknowns: [
+          "LiDAR geometric scan and multi-sensor corroboration are UNAVAILABLE.",
+        ],
+        warnings: [],
+        evidence: [
+          {
+            observation_id: "OBS-CAM-001",
+            object_id: "OBJ-001",
+            sensor: "depth_camera",
+            sensor_type: "depth_camera",
+            timestamp: 1793363063.737,
+            coordinate_frame: "oak_rgb_camera_optical_frame",
+            confidence: 0.95,
+            epistemic_status: "OBSERVED",
+            source_mode: "simulated",
+          },
+        ],
+        confidence: "medium",
+        source_mode: "simulated",
+      });
+
+    render(
+      <DashboardProvider>
+        <App enableWebSocket={true} />
+      </DashboardProvider>,
+    );
+
+    const ws = dashboardWebSockets()[0];
+    act(() => {
+      ws.triggerOpen();
+      ws.triggerMessage({
+        type: "detections",
+        sequence: 1,
+        payload: {
+          vehicle_id: "SCOUT01",
+          configured_vehicle_id: "SCOUT01",
+          telemetry_source: "rosbridge",
+          actuation_locked: true,
+          ros_connection_state: "CONNECTED",
+          topic: "/detections_json",
+          message_type: "std_msgs/msg/String",
+          stamp: 1793363063.737,
+          source_timestamp: "2026-10-30T12:00:00Z",
+          received_at: new Date().toISOString(),
+          frame: "oak_rgb_camera_optical_frame",
+          frame_classification: "CAMERA_OPTICAL_RELATIVE",
+          map_projection_allowed: false,
+          objects: [
+            {
+              id: 0,
+              class: "person",
+              score: 0.95,
+              position: { x: 0.12, y: -0.02, z: 0.65 },
+              range_m: 0.65,
+            },
+          ],
+          is_stale: false,
+          stale_after_seconds: 2.0,
+          has_received_frame: true,
+          out_of_order_count: 0,
+          invalid_message_count: 0,
+        },
+      });
+    });
+
+    // Verify Sensor Status Strip shows LiDAR UNAVAILABLE
+    expect(screen.getByTestId("sensor-status-lidar")).toHaveTextContent(
+      /UNAVAILABLE/i,
+    );
+
+    // Verify Evidence Inspector shows tracked object provenance and single-sensor status
+    const inspector = screen.getByTestId("evidence-inspector");
+    expect(inspector).toHaveTextContent(/OBJ-001/i);
+    expect(inspector).toHaveTextContent(/STATUS: OBSERVED/i);
+    expect(inspector).toHaveTextContent(/SINGLE-SENSOR ONLY/i);
+
+    // Submit environmental query to ULTRON
+    const qInput = screen.getByLabelText(
+      /QUERY ULTRON ENVIRONMENTAL INTELLIGENCE/i,
+    );
+    fireEvent.change(qInput, { target: { value: "Where is the person?" } });
+    fireEvent.click(screen.getByRole("button", { name: /ASK ULTRON/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("ultron-env-query-result")).toBeInTheDocument();
+    });
+    expect(querySpy).toHaveBeenCalledWith("Where is the person?");
+    expect(screen.getByTestId("ultron-env-query-result")).toHaveTextContent(
+      /0.65m/i,
+    );
+    expect(screen.getByTestId("ultron-env-query-result")).toHaveTextContent(
+      /OBS-CAM-001/i,
+    );
+  });
 });
+

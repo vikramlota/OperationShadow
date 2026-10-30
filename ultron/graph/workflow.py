@@ -41,7 +41,7 @@ def build_ultron_graph() -> GraphRunner:
     try:
         from langgraph.graph import StateGraph, START, END
 
-        builder = StateGraph(UltronState)
+        builder: Any = StateGraph(UltronState)
 
         # Register Nodes
         builder.add_node("plan", node_plan)
@@ -98,26 +98,26 @@ def build_ultron_graph() -> GraphRunner:
                 state: UltronState,
                 config: Any = None,
             ) -> UltronState:
-                st: UltronState = state.copy()
+                st = cast(UltronState, dict(state))
                 # If a plan already exists, run evaluate -> replan (if needed)
                 if st.get("proposed_plan") is not None:
-                    st.update(node_evaluate(st))
+                    st.update(node_evaluate(st))  # type: ignore[typeddict-item]
                     if st.get("trigger_rationale"):
-                        st.update(node_plan(st))
-                        st.update(node_validate(st))
+                        st.update(node_plan(st))  # type: ignore[typeddict-item]
+                        st.update(node_validate(st))  # type: ignore[typeddict-item]
                         if not st.get("validation_errors"):
-                            st.update(node_assign(st))
+                            st.update(node_assign(st))  # type: ignore[typeddict-item]
                         else:
-                            st.update(node_degraded(st))
+                            st.update(node_degraded(st))  # type: ignore[typeddict-item]
                     return st
 
                 # Initial planning pass: plan -> validate -> assign
-                st.update(node_plan(st))
-                st.update(node_validate(st))
+                st.update(node_plan(st))  # type: ignore[typeddict-item]
+                st.update(node_validate(st))  # type: ignore[typeddict-item]
                 if not st.get("validation_errors"):
-                    st.update(node_assign(st))
+                    st.update(node_assign(st))  # type: ignore[typeddict-item]
                 else:
-                    st.update(node_degraded(st))
+                    st.update(node_degraded(st))  # type: ignore[typeddict-item]
                 return st
 
         return SimpleGraphRunner()

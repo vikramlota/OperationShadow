@@ -11,17 +11,36 @@ class SafetyViolation(Exception):
 
 def validate_plan(plan: MissionPlan, world: WorldModel) -> Tuple[bool, List[str]]:
     """
-    Validates a proposed MissionPlan against physical constraints and known world state.
+    Validates a proposed MissionPlan against physical constraints, known world state,
+    and evidence-reference integrity.
     Returns (is_valid, list_of_errors).
     """
     errors: List[str] = []
+
     # Extract vocabulary from mission objective to ground references
     obj_words = set(world.mission.objective.lower().replace(",", " ").replace(".", " ").split())
     standard_areas = {"sector_a", "sector_b", "zone_1", "zone_2", "corridor", "building", "arena"}
     known_areas = set(a.lower() for a in world.environment.explored_areas).union(standard_areas).union(obj_words)
 
-    standard_targets = {"red_package", "target", "hazards", "hazard", "package", "thermal_anomaly"}
-    known_targets = set(obj.label.lower() for obj in world.environment.objects).union(standard_targets).union(obj_words)
+    standard_targets = {"red_package", "target", "hazards", "hazard", "package", "thermal_anomaly", "obstacle"}
+    tracked_labels = {t.label.lower() for t in world.environment.tracked_objects.values()}
+    known_targets = (
+        set(obj.label.lower() for obj in world.environment.objects)
+        .union(tracked_labels)
+        .union(standard_targets)
+        .union(obj_words)
+    )
+
+    valid_evidence_ids = {
+        o.observation_id for o in world.environment.observation_history
+    }.union(set(world.environment.tracked_objects.keys()))
+
+    # Verify any plan-level evidence references exist in the World Model
+    for eid in getattr(plan, "evidence_ids", []):
+        if eid not in valid_evidence_ids:
+            errors.append(
+                f"Hallucination: Evidence ID '{eid}' does not exist in the World Model."
+            )
 
     seen_task_types = set()
 
@@ -55,6 +74,13 @@ def validate_plan(plan: MissionPlan, world: WorldModel) -> Tuple[bool, List[str]
             task_target_clean = task.target.lower().strip()
             if task_target_clean not in known_targets and not any(w in task_target_clean for w in known_targets):
                 errors.append(f"Hallucination: Target '{task.target}' has not been observed.")
+
+        # 4. Task Evidence Reference Check
+        for teid in getattr(task, "evidence_ids", []):
+            if teid not in valid_evidence_ids:
+                errors.append(
+                    f"Hallucination: Task '{task.id}' references nonexistent evidence ID '{teid}'."
+                )
 
     is_valid = len(errors) == 0
     return is_valid, errors

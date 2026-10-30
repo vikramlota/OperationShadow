@@ -1,0 +1,10 @@
+[project]
+name = "operation-shadow"
+version = "0.2.0"
+description = "Operation Shadow Multi-Vehicle Mission Control Workspace (ULTRON Agent, FastAPI C2, React Dashboard, Hardware)"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests", "backend/tests"]
+pythonpath = [".", "backend", "backend/fastapi"]

@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from typing import Annotated, Any, Literal
 
 from pydantic import Discriminator, Field, Tag, TypeAdapter, field_validator
+from schemas.detections import DetectionsPushPayload
 from schemas.entities import (
     BatteryPercent,
     ConfidenceScore,
@@ -85,15 +86,17 @@ class MissionStatusPushPayload(SchemaBase):
 class DashboardSnapshotPayload(SchemaBase):
     """Full current-state snapshot sent immediately upon dashboard WS connect (§5.2).
 
-    Contains current mission state, both vehicles' latest telemetry, and recent
-    event/reasoning logs so a newly connected or refreshed client renders truth
-    immediately without waiting for the next incremental event.
+    Contains current mission state, both vehicles' latest telemetry, latest
+    perception detections state, and recent event/reasoning logs so a newly
+    connected or refreshed client renders truth immediately without waiting for
+    the next incremental event.
     """
 
     protocol_version: Literal["1.0"] = WS_PROTOCOL_VERSION
     generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     current_mission: MissionDetailRead | None = None
     vehicles: dict[VehicleIdEnum, VehicleRead]
+    detections: dict[VehicleIdEnum, DetectionsPushPayload] = Field(default_factory=dict)
     recent_events: list[EventRead] = Field(default_factory=list)
     recent_reasoning_traces: list[ReasoningTraceRead] = Field(default_factory=list)
 
@@ -161,11 +164,21 @@ class DashboardMissionStatusEnvelope(_DashboardEnvelopeBase):
     payload: MissionStatusPushPayload
 
 
+class DashboardDetectionsEnvelope(_DashboardEnvelopeBase):
+    """Dashboard WebSocket message envelope with `type = 'detections'`."""
+
+    type: Literal[DashboardEnvelopeTypeEnum.DETECTIONS] = (
+        DashboardEnvelopeTypeEnum.DETECTIONS
+    )
+    payload: DetectionsPushPayload
+
+
 DashboardWebSocketEnvelope = Annotated[
     Annotated[DashboardTelemetryEnvelope, Tag("telemetry")]
     | Annotated[DashboardEventEnvelope, Tag("event")]
     | Annotated[DashboardReasoningTraceEnvelope, Tag("reasoning_trace")]
-    | Annotated[DashboardMissionStatusEnvelope, Tag("mission_status")],
+    | Annotated[DashboardMissionStatusEnvelope, Tag("mission_status")]
+    | Annotated[DashboardDetectionsEnvelope, Tag("detections")],
     Discriminator("type"),
 ]
 
@@ -180,6 +193,7 @@ def validate_dashboard_ws_envelope(
     | DashboardEventEnvelope
     | DashboardReasoningTraceEnvelope
     | DashboardMissionStatusEnvelope
+    | DashboardDetectionsEnvelope
 ):
     """Validate a raw dictionary against the discriminated DashboardWebSocketEnvelope union."""
     result: (
@@ -187,6 +201,7 @@ def validate_dashboard_ws_envelope(
         | DashboardEventEnvelope
         | DashboardReasoningTraceEnvelope
         | DashboardMissionStatusEnvelope
+        | DashboardDetectionsEnvelope
     ) = _dashboard_envelope_adapter.validate_python(raw_data)
     return result
 

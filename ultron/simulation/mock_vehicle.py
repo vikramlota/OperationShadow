@@ -2,7 +2,7 @@ import asyncio
 from typing import Any
 from ultron.state import UltronState
 from ultron.simulation.generator import SyntheticDataGenerator
-from ultron.evaluator.updater import update_world_model
+from ultron.world_model.updater import update_world_model
 
 
 class SimulationHarness:

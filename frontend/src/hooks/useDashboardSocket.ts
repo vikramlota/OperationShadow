@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import {
   WS_DASHBOARD_URL,
+  type DetectionsPushPayload,
   type EventReadPayload,
   type ReasoningTraceReadPayload,
 } from "../api/client";
@@ -22,7 +23,7 @@ export interface UseDashboardSocketOptions {
  * Single managed WebSocket connection hook (Architecture §5.2, §8.1, §8.4).
  * Connects to `/ws/dashboard`, hydrates full state from the initial `snapshot`
  * envelope on connect and reconnect, dispatches live pushes (`telemetry`,
- * `event`, `reasoning_trace`, `mission_status`), and cleans up on unmount.
+ * `detections`, `event`, `reasoning_trace`, `mission_status`), and cleans up on unmount.
  */
 export function useDashboardSocket(
   options: UseDashboardSocketOptions = {},
@@ -92,6 +93,15 @@ export function useDashboardSocket(
                 type: "APPLY_WS_TELEMETRY",
                 payload: {
                   telemetry: envelope.payload as TelemetryPushPayload,
+                  sequence: envelope.sequence,
+                },
+              });
+              break;
+            case "detections":
+              dispatch({
+                type: "APPLY_WS_DETECTIONS",
+                payload: {
+                  detections: envelope.payload as DetectionsPushPayload,
                   sequence: envelope.sequence,
                 },
               });

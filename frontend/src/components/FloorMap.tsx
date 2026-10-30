@@ -38,6 +38,20 @@ export function worldToSvgY(
   return Number((padding + (yMeters / safeHeight) * usableHeight).toFixed(2));
 }
 
+export function isWithinMapBounds(
+  xMeters: number,
+  yMeters: number,
+  widthMeters: number,
+  heightMeters: number,
+): boolean {
+  return (
+    xMeters >= 0 &&
+    xMeters <= widthMeters &&
+    yMeters >= 0 &&
+    yMeters <= heightMeters
+  );
+}
+
 export function worldRectToSvg(
   x: number,
   y: number,
@@ -170,8 +184,6 @@ export function FloorMap(): React.JSX.Element {
   const widthM = activeMap.width_m > 0 ? activeMap.width_m : 20;
   const heightM = activeMap.height_m > 0 ? activeMap.height_m : 15;
 
-
-
   const xTicks = [0, 5, 10, 15, 20].filter((v) => v <= widthM);
   const yTicks = [0, 5, 10, 15].filter((v) => v <= heightM);
 
@@ -212,6 +224,31 @@ export function FloorMap(): React.JSX.Element {
       setIsUploadingMap(false);
     }
   };
+
+  // Only plot live detections when frame === "map", mapProjectionAllowed is explicitly confirmed,
+  // ROS connection is CONNECTED, and stream is NOT stale.
+  // Camera-relative (`oak_rgb_camera_optical_frame`, `oak_parent_frame`), unknown frames, and
+  // unconfirmed `map` frames are strictly excluded from the global floor map.
+  const scoutDetections = state.detections.SCOUT01;
+  const canRenderMapDetections =
+    scoutDetections.hasReceivedFrame &&
+    !scoutDetections.isStale &&
+    scoutDetections.rosConnectionState === "CONNECTED" &&
+    scoutDetections.frame === "map" &&
+    scoutDetections.mapProjectionAllowed;
+
+  const inBoundsMapDetections = canRenderMapDetections
+    ? scoutDetections.objects.filter((obj) =>
+        isWithinMapBounds(obj.position.x, obj.position.y, widthM, heightM),
+      )
+    : [];
+
+  const outOfBoundsMapDetections = canRenderMapDetections
+    ? scoutDetections.objects.filter(
+        (obj) =>
+          !isWithinMapBounds(obj.position.x, obj.position.y, widthM, heightM),
+      )
+    : [];
 
   return (
     <section className="center-map" aria-label="SVG Floor Map">
@@ -283,6 +320,26 @@ export function FloorMap(): React.JSX.Element {
             style={{ position: "absolute", top: "10px", left: "10px", zIndex: 10 }}
           >
             Floor map notice: {mapError} (using fallback geometry)
+          </div>
+        )}
+
+        {outOfBoundsMapDetections.length > 0 && (
+          <div
+            className="c2-alert-box c2-alert-warn"
+            role="status"
+            data-testid="map-out-of-bounds-detections-warning"
+            style={{ position: "absolute", top: "10px", left: "10px", zIndex: 10 }}
+          >
+            MAP BOUNDARY NOTICE: {outOfBoundsMapDetections.length} map-frame
+            detection(s) outside [{widthM}m × {heightM}m] bounds omitted without
+            clamping (
+            {outOfBoundsMapDetections
+              .map(
+                (o) =>
+                  `${o.class}#${o.id}@(${o.position.x.toFixed(2)}m,${o.position.y.toFixed(2)}m)`,
+              )
+              .join(", ")}
+            )
           </div>
         )}
 
@@ -519,8 +576,6 @@ export function FloorMap(): React.JSX.Element {
             );
           })}
 
-
-
           {/* Waypoints */}
           {activeMap.waypoints.map((wp) => {
             const wx = worldToSvgX(wp.x, widthM);
@@ -585,6 +640,39 @@ export function FloorMap(): React.JSX.Element {
                   fontFamily="var(--font-data), monospace"
                 >
                   OBS:{obs.obs_type} ({Math.round(obs.confidence * 100)}%)
+                </text>
+              </g>
+            );
+          })}
+
+          {/* Live ROS Map-Frame Object Detections (Distinct Target Reticle Markers) */}
+          {inBoundsMapDetections.map((detObj) => {
+            const dx = worldToSvgX(detObj.position.x, widthM);
+            const dy = worldToSvgY(detObj.position.y, heightM);
+            const confPct = Math.round(detObj.score * 100);
+            return (
+              <g
+                key={`ros-det-${detObj.id}-${detObj.class}`}
+                data-testid={`map-detection-marker-${detObj.id}`}
+              >
+                <rect
+                  x={dx - 6}
+                  y={dy - 6}
+                  width="12"
+                  height="12"
+                  fill="#1F180B"
+                  stroke="#D98A2B"
+                  strokeWidth="1.5"
+                />
+                <circle cx={dx} cy={dy} r="2.5" fill="#E6E8E1" />
+                <text
+                  x={dx + 9}
+                  y={dy + 3}
+                  fill="#E6E8E1"
+                  fontSize="10"
+                  fontFamily="var(--font-data), monospace"
+                >
+                  DET:{detObj.class.toUpperCase()} #{detObj.id} ({confPct}%)
                 </text>
               </g>
             );

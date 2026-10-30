@@ -1,7 +1,7 @@
 from ultron.schemas.world import WorldModel, MissionState, HazardEntity, ScoutState
 from ultron.schemas.commands import Position2D
 from ultron.schemas.mission import VehicleID
-from ultron.evaluator.triggers import check_replanning_triggers
+from ultron.replanner.triggers import check_replanning_triggers
 
 
 def test_hazard_trigger_activates_replan():

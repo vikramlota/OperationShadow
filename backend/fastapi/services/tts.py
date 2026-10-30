@@ -30,7 +30,7 @@ def _get_client() -> Any | None:
         return None
 
     try:
-        from elevenlabs.client import ElevenLabs
+        from elevenlabs.client import ElevenLabs  # type: ignore[import-not-found]
         return ElevenLabs(api_key=api_key)
     except Exception as exc:
         logger.error(f"Failed to initialise ElevenLabs client: {exc}")
@@ -56,7 +56,7 @@ def speak_rationale(
         return
 
     try:
-        from elevenlabs import stream as elevenlabs_stream
+        from elevenlabs import stream as elevenlabs_stream  # type: ignore[import-not-found]
 
         audio_stream = client.text_to_speech.stream(
             text=text,

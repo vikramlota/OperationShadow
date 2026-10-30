@@ -6,6 +6,7 @@ import { EventLog } from "./components/EventLog";
 import { FloorMap } from "./components/FloorMap";
 import { MissionPanel } from "./components/MissionPanel";
 import { MissionReplayScrubber } from "./components/MissionReplayScrubber";
+import { PerceptionPanel } from "./components/PerceptionPanel";
 import { ReasoningTracePanel } from "./components/ReasoningTracePanel";
 import { ScoutKeyboardControl } from "./components/ScoutKeyboardControl";
 import { SimulatedModeToggle } from "./components/SimulatedModeToggle";
@@ -58,7 +59,12 @@ export default function App({
   }, [dispatch, state.hardwareLockout, state.ultronIsStub]);
 
   const scout = state.vehicles.SCOUT01;
+  const scoutDet = state.detections.SCOUT01;
   const allSimulated = scout.mode === "simulated";
+  const hasLiveRosPerception =
+    scoutDet.telemetrySource === "rosbridge" ||
+    scoutDet.rosConnectionState === "CONNECTED" ||
+    scoutDet.hasReceivedFrame;
 
   return (
     <main className="app-shell">
@@ -109,6 +115,12 @@ export default function App({
             {allSimulated ? "SIMULATED (MOCK ADAPTERS)" : "MIXED / REAL"}
           </span>
 
+          {hasLiveRosPerception && (
+            <span className="badge badge-nominal">
+              PERCEPTION: LIVE ROS ({scoutDet.rosConnectionState})
+            </span>
+          )}
+
           <span className="badge" style={{ color: "var(--text-muted)" }}>
             LOCKOUT: {state.hardwareLockout ? "ENGAGED" : "DISENGAGED"}
           </span>
@@ -129,9 +141,10 @@ export default function App({
       {/* 3. Center Column: Dominant Tactical Indoor Floor Map */}
       <FloorMap />
 
-      {/* 4. Right Rail: Vehicle Inspector & Direct Optical Feed */}
+      {/* 4. Right Rail: Vehicle Inspector, ROS Perception & Direct Optical Feed */}
       <aside className="right-rail" aria-label="Vehicle Inspector and Optical Feeds">
         <VehicleStatusCard vehicle={scout} />
+        <PerceptionPanel vehicleId="SCOUT01" />
         <CameraFeed />
       </aside>
 
