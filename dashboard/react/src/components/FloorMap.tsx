@@ -102,140 +102,196 @@ const FALLBACK_SIMULATION_MAP: FloorPlanConfigPayload = {
   ],
   waypoints: [
     { id: "WP_BASE", label: "Base Station", x: 1.5, y: 1.5 },
-    { id: "WP_ALPHA_MID", label: "Alpha Checkpoint", x: 5.0, y: 3.75 },
-    { id: "WP_BRAVO_CENTER", label: "Bravo Overwatch", x: 15.0, y: 7.5 },
+    { id: "WP_INSPECT_A", label: "Inspect Alpha", x: 5.0, y: 4.0 },
+    { id: "WP_INSPECT_B", label: "Inspect Bravo", x: 15.0, y: 8.0 },
   ],
   hawk_geofence: {
     id: "GEOFENCE_HAWK01",
-    label: "HAWK01 Indoor Flight Envelope (Provisional)",
-    x: 1.0,
-    y: 1.0,
-    width: 18.0,
-    height: 13.0,
+    label: "HAWK01 Flight Envelope (Provisional)",
+    x: 1,
+    y: 1,
+    width: 18,
+    height: 13,
     max_altitude_m: 3.0,
   },
 };
 
 export function FloorMap(): React.JSX.Element {
   const { state, dispatch } = useDashboardStore();
+  const [mapConfig, setMapConfig] =
+    useState<FloorPlanConfigPayload>(FALLBACK_SIMULATION_MAP);
   const [mapError, setMapError] = useState<string | null>(null);
+  const [zoomLevel, setZoomLevel] = useState<number>(1.0);
+  const [showTrail, setShowTrail] = useState<boolean>(true);
+  const [selectedWaypointId, setSelectedWaypointId] = useState<string | null>(null);
+  const [scoutBreadcrumbs, setScoutBreadcrumbs] = useState<Array<{ x: number; y: number }>>([]);
 
   useEffect(() => {
-    if (state.floorPlan !== null) {
-      return;
-    }
     let cancelled = false;
     fetchFloorMap()
-      .then((config) => {
+      .then((payload) => {
         if (!cancelled) {
-          dispatch({ type: "SET_FLOOR_PLAN", payload: config });
-          setMapError(null);
+          setMapConfig(payload);
         }
       })
       .catch((err) => {
         if (!cancelled) {
           setMapError(
-            err instanceof Error
-              ? err.message
-              : "Unable to load /map floor configuration",
+            err instanceof Error ? err.message : "Failed to load floor map",
           );
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [state.floorPlan, dispatch]);
+  }, []);
 
-  const activeMap = state.floorPlan ?? FALLBACK_SIMULATION_MAP;
-  const widthM = activeMap.width_m;
-  const heightM = activeMap.height_m;
-  const geofenceRect = worldRectToSvg(
-    activeMap.hawk_geofence.x,
-    activeMap.hawk_geofence.y,
-    activeMap.hawk_geofence.width,
-    activeMap.hawk_geofence.height,
-    widthM,
-    heightM,
-  );
+  // Update SCOUT01 breadcrumbs trail
+  useEffect(() => {
+    const pos = state.vehicles.SCOUT01.position;
+    setScoutBreadcrumbs((prev) => {
+      const last = prev[prev.length - 1];
+      if (last && Math.hypot(last.x - pos.x, last.y - pos.y) < 0.2) {
+        return prev;
+      }
+      return [...prev.slice(-24), { x: pos.x, y: pos.y }];
+    });
+  }, [state.vehicles.SCOUT01.position]);
 
-  const xTicks = [0, 5, 10, 15, 20].filter((t) => t <= widthM);
-  const yTicks = [0, 5, 10, 15].filter((t) => t <= heightM);
+  const activeMap = mapConfig;
+  const widthM = activeMap.width_m > 0 ? activeMap.width_m : 20;
+  const heightM = activeMap.height_m > 0 ? activeMap.height_m : 15;
+
+
+
+  const xTicks = [0, 5, 10, 15, 20].filter((v) => v <= widthM);
+  const yTicks = [0, 5, 10, 15].filter((v) => v <= heightM);
 
   const selectVehicle = (vehicleId: VehicleId): void => {
     dispatch({ type: "SELECT_VEHICLE", payload: vehicleId });
   };
 
+  const selectedWaypoint = activeMap.waypoints.find((w) => w.id === selectedWaypointId);
+
   return (
-    <section className="c2-panel" aria-label="SVG Floor Map">
-      <div className="c2-panel-header">
-        <h2 className="c2-panel-title">
-          TACTICAL INDOOR FLOOR MAP // {activeMap.coordinate_system.toUpperCase()}
-        </h2>
-        <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+    <section className="center-map" aria-label="SVG Floor Map">
+      <div className="map-header">
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <h2 className="panel-title">
+            TACTICAL MAP // {activeMap.coordinate_system.toUpperCase()}
+          </h2>
           {activeMap.is_provisional_simulation_config && (
             <span
-              className="c2-badge c2-badge-warning"
-              title="Hardware & IoT §11 floor layout not yet supplied; displaying provisional simulation geometry"
+              className="badge badge-warning"
+              style={{ fontSize: "9px", padding: "1px 6px" }}
+              title="Provisional simulation geometry"
             >
               PROVISIONAL SIMULATION LAYOUT ({widthM}m × {heightM}m)
             </span>
           )}
-          <span className="c2-panel-meta">
-            SELECTED: {state.selectedVehicleId}
+        </div>
+
+        <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+          {(["SCOUT01"] as const).map((vid) => {
+            const v = state.vehicles[vid];
+            const isSelected = state.selectedVehicleId === vid;
+            return (
+              <button
+                key={vid}
+                type="button"
+                className={`btn ${isSelected ? "btn-primary" : "btn-secondary"}`}
+                style={{ padding: "2px 8px", fontSize: "10px" }}
+                onClick={() => selectVehicle(vid)}
+                aria-pressed={isSelected}
+                aria-label={`Select ${vid} on tactical map`}
+              >
+                {vid} [{getVehicleHealthLabel(v)}]
+              </button>
+            );
+          })}
+          <span className="panel-meta" style={{ marginLeft: "4px" }}>
+            FOCUSED: {state.selectedVehicleId}
           </span>
         </div>
       </div>
 
-      <div className="c2-panel-body">
+      <div className="map-viewport">
         {mapError && (
-          <div className="c2-alert-box c2-alert-warning" role="status">
-            Floor map endpoint notice: {mapError} (rendering provisional simulation fallback)
+          <div
+            className="c2-alert-box c2-alert-warn"
+            role="status"
+            style={{ position: "absolute", top: "10px", left: "10px", zIndex: 10 }}
+          >
+            Floor map notice: {mapError} (using fallback geometry)
           </div>
         )}
 
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            gap: "6px",
-            flexWrap: "wrap",
-          }}
-        >
-          <div style={{ display: "flex", gap: "6px" }}>
-            {(["SCOUT01"] as const).map((vid) => {
-              const v = state.vehicles[vid];
-              const isSelected = state.selectedVehicleId === vid;
-              return (
-                <button
-                  key={vid}
-                  type="button"
-                  className={`c2-btn ${isSelected ? "c2-btn-active" : "c2-btn-secondary"}`}
-                  onClick={() => selectVehicle(vid)}
-                  aria-pressed={isSelected}
-                  aria-label={`Select ${vid} on tactical map`}
-                >
-                  {vid} [{getVehicleHealthLabel(v)}]
-                </button>
-              );
-            })}
-          </div>
-          <span className="c2-panel-meta">
-            GEOFENCE MAX ALT: {activeMap.hawk_geofence.max_altitude_m.toFixed(1)}m
-          </span>
+        {/* Floating Zoom & Layer Controls */}
+        <div className="map-toolbar">
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => setZoomLevel((z) => Math.min(2.0, Number((z + 0.2).toFixed(1))))}
+            aria-label="Zoom Map In"
+            title="Zoom In"
+          >
+            +
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => setZoomLevel((z) => Math.max(0.8, Number((z - 0.2).toFixed(1))))}
+            aria-label="Zoom Map Out"
+            title="Zoom Out"
+          >
+            -
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            style={{ fontSize: "9px", padding: "4px 4px" }}
+            onClick={() => setZoomLevel(1.0)}
+            aria-label="Reset Map Zoom"
+            title="Reset Zoom"
+          >
+            1:1
+          </button>
+          <button
+            type="button"
+            className={`btn ${showTrail ? "btn-primary" : "btn-secondary"}`}
+            style={{ fontSize: "9px", padding: "4px 4px" }}
+            onClick={() => setShowTrail((prev) => !prev)}
+            aria-label="Toggle Vehicle Trail"
+            title="Toggle Breadcrumb Trail"
+          >
+            TRL
+          </button>
         </div>
 
+        {/* Selected Waypoint HUD Card */}
+        {selectedWaypoint && (
+          <div className="waypoint-hud-card">
+            <div style={{ color: "var(--marker-scout)", fontWeight: 600 }}>
+              {selectedWaypoint.label} [{selectedWaypoint.id}]
+            </div>
+            <div style={{ color: "var(--text-secondary)", fontSize: "10px", marginTop: "2px" }}>
+              X: {selectedWaypoint.x.toFixed(2)}m  Y: {selectedWaypoint.y.toFixed(2)}m
+            </div>
+          </div>
+        )}
+
+        {/* Main Tactical SVG Canvas */}
         <svg
           viewBox={`0 0 ${MAP_VIEWBOX_WIDTH} ${MAP_VIEWBOX_HEIGHT}`}
           width="100%"
-          height="360"
+          height="100%"
           role="img"
           aria-label="Indoor Floor Plan Tactical Display"
           style={{
-            backgroundColor: "var(--bg-canvas)",
-            border: "1px solid var(--border-subtle)",
-            borderRadius: "2px",
             display: "block",
+            transform: `scale(${zoomLevel})`,
+            transformOrigin: "center center",
+            transition: "transform 150ms ease-out",
           }}
         >
           <defs>
@@ -248,20 +304,20 @@ export function FloorMap(): React.JSX.Element {
               <path
                 d="M 30 0 L 0 0 0 30"
                 fill="none"
-                stroke="#1A221E"
+                stroke="#14171A"
                 strokeWidth="1"
               />
             </pattern>
           </defs>
 
-          {/* Subtle Coordinate Grid Background */}
+          {/* Coordinate Grid Background */}
           <rect
             x={MAP_PADDING}
             y={MAP_PADDING}
             width={MAP_VIEWBOX_WIDTH - MAP_PADDING * 2}
             height={MAP_VIEWBOX_HEIGHT - MAP_PADDING * 2}
             fill="url(#tactical-grid-pattern)"
-            stroke="#26302B"
+            stroke="#1E2226"
             strokeWidth="1"
           />
 
@@ -275,15 +331,15 @@ export function FloorMap(): React.JSX.Element {
                   y1={MAP_PADDING - 5}
                   x2={sx}
                   y2={MAP_PADDING}
-                  stroke="#636E64"
+                  stroke="#4E5553"
                   strokeWidth="1"
                 />
                 <text
                   x={sx}
-                  y={MAP_PADDING - 10}
-                  fill="#9CA59B"
-                  fontSize="10"
-                  fontFamily="monospace"
+                  y={MAP_PADDING - 8}
+                  fill="#8A8F8C"
+                  fontSize="9"
+                  fontFamily="var(--font-data), monospace"
                   textAnchor="middle"
                 >
                   {tick}m
@@ -300,15 +356,15 @@ export function FloorMap(): React.JSX.Element {
                   y1={sy}
                   x2={MAP_PADDING}
                   y2={sy}
-                  stroke="#636E64"
+                  stroke="#4E5553"
                   strokeWidth="1"
                 />
                 <text
                   x={MAP_PADDING - 8}
                   y={sy + 3}
-                  fill="#9CA59B"
-                  fontSize="10"
-                  fontFamily="monospace"
+                  fill="#8A8F8C"
+                  fontSize="9"
+                  fontFamily="var(--font-data), monospace"
                   textAnchor="end"
                 >
                   {tick}m
@@ -317,9 +373,9 @@ export function FloorMap(): React.JSX.Element {
             );
           })}
 
-          {/* Indoor Rooms */}
+          {/* Defined Rooms / Sectors */}
           {activeMap.rooms.map((room) => {
-            const r = worldRectToSvg(
+            const rect = worldRectToSvg(
               room.x,
               room.y,
               room.width,
@@ -330,20 +386,23 @@ export function FloorMap(): React.JSX.Element {
             return (
               <g key={room.id} data-testid={`map-room-${room.id}`}>
                 <rect
-                  x={r.x}
-                  y={r.y}
-                  width={r.width}
-                  height={r.height}
-                  fill="rgba(23, 30, 27, 0.35)"
-                  stroke="#5C744D"
-                  strokeWidth="1.5"
+                  x={rect.x}
+                  y={rect.y}
+                  width={rect.width}
+                  height={rect.height}
+                  fill="#0D0F10"
+                  fillOpacity="0.75"
+                  stroke="#2A3038"
+                  strokeWidth="1.2"
                 />
                 <text
-                  x={r.x + 8}
-                  y={r.y + 16}
-                  fill="#9CA59B"
+                  x={rect.x + 8}
+                  y={rect.y + 16}
+                  fill="#8A8F8C"
                   fontSize="10"
-                  fontFamily="monospace"
+                  fontFamily="var(--font-ui), sans-serif"
+                  fontWeight="600"
+                  letterSpacing="0.04em"
                 >
                   {room.name.toUpperCase()}
                 </text>
@@ -351,51 +410,45 @@ export function FloorMap(): React.JSX.Element {
             );
           })}
 
-          {/* Optional Flight Envelope Geofence Boundary if present */}
-          {activeMap.hawk_geofence && (
-            <g data-testid="map-hawk-geofence">
-              <rect
-                x={geofenceRect.x}
-                y={geofenceRect.y}
-                width={geofenceRect.width}
-                height={geofenceRect.height}
-                fill="none"
-                stroke="#D98A2B"
-                strokeWidth="1.5"
-                strokeDasharray="6 4"
-              />
-              <text
-                x={geofenceRect.x + 8}
-                y={geofenceRect.y + geofenceRect.height - 8}
-                fill="#D98A2B"
-                fontSize="10"
-                fontFamily="monospace"
-              >
-                {activeMap.hawk_geofence.label.toUpperCase()}
-              </text>
-            </g>
-          )}
 
-          {/* Fixed Waypoints */}
+
+          {/* Waypoints */}
           {activeMap.waypoints.map((wp) => {
             const wx = worldToSvgX(wp.x, widthM);
             const wy = worldToSvgY(wp.y, heightM);
+            const isSelectedWp = selectedWaypointId === wp.id;
             return (
-              <g key={wp.id} data-testid={`map-waypoint-${wp.id}`}>
+              <g
+                key={wp.id}
+                data-testid={`map-waypoint-${wp.id}`}
+                onClick={() => setSelectedWaypointId(isSelectedWp ? null : wp.id)}
+                style={{ cursor: "pointer" }}
+              >
+                {isSelectedWp && (
+                  <circle
+                    cx={wx}
+                    cy={wy}
+                    r="9"
+                    fill="none"
+                    stroke="#E2E4DE"
+                    strokeWidth="1"
+                    strokeDasharray="2 2"
+                  />
+                )}
                 <circle
                   cx={wx}
                   cy={wy}
                   r="4"
-                  fill="#111614"
-                  stroke="#8AA37B"
+                  fill="#131618"
+                  stroke={isSelectedWp ? "#E2E4DE" : "#5A8A6A"}
                   strokeWidth="1.5"
                 />
                 <text
                   x={wx + 7}
                   y={wy + 3}
-                  fill="#8AA37B"
+                  fill={isSelectedWp ? "#E2E4DE" : "#5A8A6A"}
                   fontSize="10"
-                  fontFamily="monospace"
+                  fontFamily="var(--font-data), monospace"
                 >
                   {wp.label} ({wp.x.toFixed(1)},{wp.y.toFixed(1)})
                 </text>
@@ -403,7 +456,7 @@ export function FloorMap(): React.JSX.Element {
             );
           })}
 
-          {/* Reported Observations */}
+          {/* Observations */}
           {state.observations.map((obs) => {
             const ox = worldToSvgX(obs.location_x, widthM);
             const oy = worldToSvgY(obs.location_y, heightM);
@@ -411,16 +464,16 @@ export function FloorMap(): React.JSX.Element {
               <g key={obs.id} data-testid={`map-observation-${obs.id}`}>
                 <polygon
                   points={`${ox},${oy - 6} ${ox + 6},${oy + 5} ${ox - 6},${oy + 5}`}
-                  fill="#D98A2B"
-                  stroke="#0A0D0C"
+                  fill="#C8882A"
+                  stroke="#08090A"
                   strokeWidth="1"
                 />
                 <text
                   x={ox + 8}
                   y={oy + 3}
-                  fill="#F3B35F"
+                  fill="#D8A850"
                   fontSize="10"
-                  fontFamily="monospace"
+                  fontFamily="var(--font-data), monospace"
                 >
                   OBS:{obs.obs_type} ({Math.round(obs.confidence * 100)}%)
                 </text>
@@ -428,7 +481,21 @@ export function FloorMap(): React.JSX.Element {
             );
           })}
 
-          {/* Vehicle Marker: SCOUT01 (ground diamond) */}
+          {/* Breadcrumb Trail */}
+          {showTrail && scoutBreadcrumbs.length > 1 && (
+            <polyline
+              points={scoutBreadcrumbs
+                .map((pt) => `${worldToSvgX(pt.x, widthM)},${worldToSvgY(pt.y, heightM)}`)
+                .join(" ")}
+              fill="none"
+              stroke="#5A8A6A"
+              strokeWidth="1.5"
+              strokeDasharray="3 3"
+              opacity="0.6"
+            />
+          )}
+
+          {/* Vehicle Markers */}
           {(["SCOUT01"] as const).map((vid) => {
             const v = state.vehicles[vid];
             const vx = worldToSvgX(v.position.x, widthM);
@@ -442,11 +509,11 @@ export function FloorMap(): React.JSX.Element {
               v.status === "EMERGENCY_STOPPED" || v.status === "FAULT";
 
             const strokeColor = isStopped
-              ? "#E03E3E"
+              ? "#E04040"
               : isDegraded
-                ? "#D98A2B"
+                ? "#C8882A"
                 : vid === "SCOUT01"
-                  ? "#8AA37B"
+                  ? "#7AAA8A"
                   : "#7A9A95";
 
             const healthTag = getVehicleHealthLabel(v);
@@ -459,13 +526,26 @@ export function FloorMap(): React.JSX.Element {
                 style={{ cursor: "pointer" }}
                 opacity={v.connection === "DISCONNECTED" ? 0.65 : 1}
               >
+                {/* Radar sweep animation */}
+                {v.status === "ACTIVE" && !isStopped && (
+                  <circle
+                    cx={vx}
+                    cy={vy}
+                    r="8"
+                    className="radar-ring c2-radar-ring"
+                    fill="none"
+                    stroke={strokeColor}
+                    strokeWidth="1.5"
+                  />
+                )}
+
                 {isSelected && (
                   <circle
                     cx={vx}
                     cy={vy}
                     r="16"
                     fill="none"
-                    stroke="#E6E8E1"
+                    stroke="#E2E4DE"
                     strokeWidth="1"
                     strokeDasharray="3 2"
                     data-testid={`map-selected-ring-${vid}`}
@@ -473,19 +553,31 @@ export function FloorMap(): React.JSX.Element {
                 )}
 
                 {vid === "SCOUT01" ? (
-                  <polygon
-                    points={`${vx},${vy - 9} ${vx + 9},${vy} ${vx},${vy + 9} ${vx - 9},${vy}`}
-                    fill="#111614"
-                    stroke={strokeColor}
-                    strokeWidth="2"
-                  />
+                  <g>
+                    {/* Heading Vector */}
+                    <line
+                      x1={vx}
+                      y1={vy}
+                      x2={vx + 12}
+                      y2={vy - 12}
+                      stroke="#7AAA8A"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                    />
+                    <polygon
+                      points={`${vx},${vy - 8} ${vx + 8},${vy} ${vx},${vy + 8} ${vx - 8},${vy}`}
+                      fill="#131618"
+                      stroke={strokeColor}
+                      strokeWidth="2"
+                    />
+                  </g>
                 ) : (
                   <g>
                     <circle
                       cx={vx}
                       cy={vy}
                       r="8"
-                      fill="#111614"
+                      fill="#131618"
                       stroke={strokeColor}
                       strokeWidth="2"
                     />
@@ -508,24 +600,36 @@ export function FloorMap(): React.JSX.Element {
                   </g>
                 )}
 
+                {/* Marker Callout Tag */}
+                <rect
+                  x={vx + 11}
+                  y={vy - 16}
+                  width="80"
+                  height="26"
+                  fill="#0D0F10"
+                  fillOpacity="0.88"
+                  stroke={strokeColor}
+                  strokeWidth="1"
+                  rx="2"
+                />
                 <text
-                  x={vx + 13}
-                  y={vy - 3}
-                  fill="#E6E8E1"
-                  fontSize="11"
-                  fontWeight="700"
-                  fontFamily="monospace"
+                  x={vx + 15}
+                  y={vy - 5}
+                  fill="#E2E4DE"
+                  fontSize="10"
+                  fontWeight="600"
+                  fontFamily="var(--font-data), monospace"
                 >
-                  {vid} [{healthTag}]
+                  {vid}
                 </text>
                 <text
-                  x={vx + 13}
-                  y={vy + 10}
-                  fill="#9CA59B"
-                  fontSize="10"
-                  fontFamily="monospace"
+                  x={vx + 15}
+                  y={vy + 6}
+                  fill={strokeColor}
+                  fontSize="8"
+                  fontFamily="var(--font-data), monospace"
                 >
-                  X:{v.position.x.toFixed(2)}m Y:{v.position.y.toFixed(2)}m
+                  {healthTag} // {v.battery.toFixed(0)}%
                 </text>
               </g>
             );

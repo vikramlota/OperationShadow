@@ -13,6 +13,8 @@ export function EmergencyStopButton(): React.JSX.Element {
   const [isDispatching, setIsDispatching] = useState<boolean>(false);
   const [requestError, setRequestError] = useState<string | null>(null);
 
+  const targets: EmergencyStopTarget[] = ["ALL", "SCOUT01"];
+
   const handleArmTarget = (target: EmergencyStopTarget): void => {
     if (isDispatching) {
       return;
@@ -61,7 +63,7 @@ export function EmergencyStopButton(): React.JSX.Element {
           FAST-PATH E-STOP:
         </span>
 
-        {(["ALL", "SCOUT01"] as const).map((target) => (
+        {targets.map((target) => (
           <button
             key={target}
             type="button"

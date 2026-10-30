@@ -8,6 +8,8 @@ export function SimulatedModeToggle(): React.JSX.Element {
   const [statusNotice, setStatusNotice] = useState<string | null>(null);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
 
+  const vehicleList: VehicleId[] = ["SCOUT01"];
+
   const handleModeChange = async (
     vehicleId: VehicleId,
     enableSimulated: boolean,
@@ -36,54 +38,64 @@ export function SimulatedModeToggle(): React.JSX.Element {
   };
 
   return (
-    <section className="c2-panel" aria-label="Simulated Mode Status">
-      <div className="c2-panel-header">
-        <h2 className="c2-panel-title">OPERATING MODE &amp; SAFETY LOCKOUT</h2>
+    <section className="panel" aria-label="Simulated Mode Status">
+      <div className="panel-header">
+        <h2 className="panel-title">OPERATING MODE &amp; SAFETY LOCKOUT</h2>
         <span
-          className={`c2-badge ${
-            state.hardwareLockout ? "c2-badge-warning" : "c2-badge-critical"
+          className={`badge ${
+            state.hardwareLockout ? "badge-warning" : "badge-critical"
           }`}
+          style={{ fontSize: "10px", padding: "1px 6px" }}
         >
           Hardware Lockout:{" "}
           {state.hardwareLockout ? "ACTIVE (Simulated Only)" : "INACTIVE"}
         </span>
       </div>
 
-      <div className="c2-panel-body">
+      <div className="panel-body">
         <div
           style={{
             fontSize: "11px",
             color: "var(--text-secondary)",
-            fontFamily: "var(--font-mono)",
+            fontFamily: "var(--font-data)",
+            lineHeight: 1.4,
           }}
         >
           Physical hardware control is locked until TRD v2.0 &amp; Hardware/IoT
           failsafes are verified.
         </div>
 
-        {(["SCOUT01"] as const).map((vid) => {
+        {vehicleList.map((vid) => {
           const v = state.vehicles[vid];
           const isBusy = busyVehicle === vid;
           return (
             <div
               key={vid}
-              className="c2-kv-item"
-              style={{ alignItems: "center" }}
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                padding: "6px 8px",
+                background: "var(--sf-base)",
+                borderRadius: "3px",
+                border: "1px solid var(--border-subtle)",
+              }}
             >
               <div>
-                <div className="c2-mono" style={{ fontWeight: 700 }}>
+                <div style={{ fontFamily: "var(--font-data)", fontWeight: 600, fontSize: "11px" }}>
                   {vid}: {v.mode.toUpperCase()}
                 </div>
-                <div className="c2-kv-label">
+                <div style={{ fontFamily: "var(--font-ui)", fontSize: "9px", color: "var(--text-muted)" }}>
                   BACKEND CONFIRMED MODE: {v.mode.toUpperCase()}
                 </div>
               </div>
               <div style={{ display: "flex", gap: "4px" }}>
                 <button
                   type="button"
-                  className={`c2-btn ${
-                    v.mode === "simulated" ? "c2-btn-active" : "c2-btn-secondary"
+                  className={`btn ${
+                    v.mode === "simulated" ? "btn-primary" : "btn-secondary"
                   }`}
+                  style={{ padding: "3px 8px", fontSize: "10px" }}
                   disabled={isBusy}
                   onClick={() => void handleModeChange(vid, true)}
                   aria-label={`Set ${vid} to Simulated Mode`}
@@ -92,9 +104,10 @@ export function SimulatedModeToggle(): React.JSX.Element {
                 </button>
                 <button
                   type="button"
-                  className={`c2-btn ${
-                    v.mode === "real" ? "c2-btn-active" : "c2-btn-secondary"
+                  className={`btn ${
+                    v.mode === "real" ? "btn-primary" : "btn-secondary"
                   }`}
+                  style={{ padding: "3px 8px", fontSize: "10px" }}
                   disabled={isBusy}
                   onClick={() => void handleModeChange(vid, false)}
                   aria-label={`Attempt Real Hardware Mode for ${vid}`}

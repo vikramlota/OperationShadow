@@ -36,16 +36,16 @@ export function EventLog(): React.JSX.Element {
   };
 
   return (
-    <section className="c2-panel" aria-label="Event Log">
-      <div className="c2-panel-header">
-        <h2 className="c2-panel-title">
-          CHRONOLOGICAL EVENT LOG ({filteredEvents.length})
+    <section className="panel" aria-label="Event Log">
+      <div className="panel-header">
+        <h2 className="panel-title">
+          EVENT LOG ({filteredEvents.length})
         </h2>
-        <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+        <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
           <select
             aria-label="Filter Event Category"
-            className="c2-select"
-            style={{ width: "auto", padding: "2px 6px", fontSize: "11px" }}
+            className="input"
+            style={{ width: "auto", padding: "2px 6px", fontSize: "10px", height: "24px" }}
             value={categoryFilter}
             onChange={(e) => setCategoryFilter(e.target.value)}
           >
@@ -57,7 +57,8 @@ export function EventLog(): React.JSX.Element {
           </select>
           <button
             type="button"
-            className="c2-btn c2-btn-secondary"
+            className="btn btn-secondary"
+            style={{ padding: "2px 6px", fontSize: "10px", height: "24px" }}
             onClick={() => void handleSyncEvents()}
             disabled={loading}
             aria-label="Refresh Event Log"
@@ -67,7 +68,7 @@ export function EventLog(): React.JSX.Element {
         </div>
       </div>
 
-      <div className="c2-panel-body">
+      <div className="panel-body">
         {errorMsg && (
           <div className="c2-alert-box c2-alert-error" role="alert">
             {errorMsg}
@@ -75,38 +76,30 @@ export function EventLog(): React.JSX.Element {
         )}
 
         {filteredEvents.length === 0 ? (
-          <div className="c2-log-viewport" style={{ color: "var(--text-muted)" }}>
+          <div style={{ color: "var(--text-muted)", fontSize: "11px", padding: "8px 0" }}>
             No operational events recorded yet.
           </div>
         ) : (
-          <div className="c2-log-viewport" role="log" aria-label="Operational Event Entries">
+          <div style={{ display: "flex", flexDirection: "column", gap: "3px" }} role="log" aria-label="Operational Event Entries">
             {filteredEvents.map((evt) => {
               const cat = evt.category.toUpperCase();
               const entryClass =
                 cat === "SAFETY" || cat === "SECURITY"
-                  ? "c2-log-entry c2-log-entry-critical"
+                  ? "log-entry log-entry-critical"
                   : cat === "TELEMETRY"
-                    ? "c2-log-entry c2-log-entry-warning"
-                    : "c2-log-entry";
+                    ? "log-entry log-entry-warning"
+                    : "log-entry log-entry-nominal";
               return (
                 <div key={evt.id} className={entryClass}>
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      fontFamily: "var(--font-mono)",
-                      fontSize: "11px",
-                      color: "var(--text-secondary)",
-                    }}
-                  >
+                  <div className="log-meta" style={{ display: "flex", justifyContent: "space-between" }}>
                     <span>
-                      [{formatTacticalTimestamp(evt.timestamp)}] [{cat}]
+                      {formatTacticalTimestamp(evt.timestamp)} // [{cat}]
                     </span>
                     <span>
                       {evt.mission_id} // {evt.id}
                     </span>
                   </div>
-                  <div style={{ color: "var(--text-primary)", marginTop: "2px" }}>
+                  <div className="log-text" style={{ fontSize: "11px", color: "var(--text-primary)" }}>
                     {evt.message}
                   </div>
                 </div>

@@ -23,16 +23,6 @@ export function formatTacticalTimestamp(iso: string | null): string {
   return date.toISOString().slice(11, 23) + "Z";
 }
 
-function getBatteryColor(battery: number): string {
-  if (battery < 20) {
-    return "var(--status-critical-bright)";
-  }
-  if (battery <= 40) {
-    return "var(--status-warning)";
-  }
-  return "var(--accent-military)";
-}
-
 function getVehicleDiagnosticWarning(vehicle: VehicleSummaryState): string | null {
   if (vehicle.status === "EMERGENCY_STOPPED") {
     return "CRITICAL: VEHICLE EMERGENCY STOPPED";
@@ -84,17 +74,17 @@ export function VehicleStatusCard({
 
   const connectionBadgeClass =
     vehicle.connection === "CONNECTED" && !vehicle.isStale
-      ? "c2-badge c2-badge-nominal"
+      ? "badge badge-nominal"
       : vehicle.connection === "UNKNOWN" || vehicle.isStale
-        ? "c2-badge c2-badge-warning"
-        : "c2-badge c2-badge-critical";
+        ? "badge badge-warning"
+        : "badge badge-critical";
 
   const statusBadgeClass =
     vehicle.status === "EMERGENCY_STOPPED" || vehicle.status === "FAULT"
-      ? "c2-badge c2-badge-critical"
+      ? "badge badge-critical"
       : vehicle.status === "UNKNOWN"
-        ? "c2-badge c2-badge-warning"
-        : "c2-badge c2-badge-nominal";
+        ? "badge badge-warning"
+        : "badge badge-nominal";
 
   const handleRefresh = async (): Promise<void> => {
     setIsRefreshing(true);
@@ -120,28 +110,32 @@ export function VehicleStatusCard({
 
   return (
     <article
-      className={`c2-panel ${isSelected ? "c2-panel-selected" : ""}`}
+      className="panel"
+      style={{
+        borderLeft: isSelected ? "3px solid var(--accent-primary)" : undefined,
+      }}
       aria-label={`Vehicle ${vehicle.id}`}
     >
-      <div className="c2-panel-header">
+      <div className="panel-header">
         <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-          <h3 className="c2-panel-title">{vehicle.id}</h3>
-          <span className="c2-badge">
-            {vehicle.vehicleType === "ground" ? "GROUND ROVER" : "AERIAL DRONE"}
+          <h3 className="panel-title">{vehicle.id}</h3>
+          <span className="badge" style={{ fontSize: "9px", padding: "1px 5px" }}>
+            {vehicle.vehicleType === "ground" ? "ROVER" : "DRONE"}
           </span>
         </div>
         <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
-          <span className="c2-badge c2-badge-warning">
-            MODE: {vehicle.mode.toUpperCase()}
+          <span className="badge badge-warning" style={{ fontSize: "10px", padding: "1px 6px" }}>
+            {vehicle.mode.toUpperCase()}
           </span>
-          <span className={connectionBadgeClass}>
-            LINK: {vehicle.connection}
+          <span className={connectionBadgeClass} style={{ fontSize: "10px", padding: "1px 6px" }}>
+            {vehicle.connection}
             {vehicle.isStale ? " (STALE)" : ""}
           </span>
         </div>
       </div>
 
-      <div className="c2-panel-body">
+      <div className="panel-body">
+        {/* Status bar and actions */}
         <div
           style={{
             display: "flex",
@@ -150,21 +144,25 @@ export function VehicleStatusCard({
             gap: "6px",
           }}
         >
-          <span className={statusBadgeClass}>STATUS: {vehicle.status}</span>
+          <span className={statusBadgeClass} style={{ fontSize: "10px" }}>
+            STATUS: {vehicle.status}
+          </span>
           <div style={{ display: "flex", gap: "4px" }}>
             <button
               type="button"
-              className="c2-btn c2-btn-secondary"
+              className={`btn ${isSelected ? "btn-primary" : "btn-secondary"}`}
+              style={{ padding: "3px 8px", fontSize: "10px" }}
               onClick={() =>
                 dispatch({ type: "SELECT_VEHICLE", payload: vehicle.id })
               }
               aria-pressed={isSelected}
             >
-              {isSelected ? "SELECTED" : "FOCUS"}
+              {isSelected ? "FOCUSED" : "FOCUS"}
             </button>
             <button
               type="button"
-              className="c2-btn c2-btn-secondary"
+              className="btn btn-secondary"
+              style={{ padding: "3px 8px", fontSize: "10px" }}
               onClick={() => void handleRefresh()}
               disabled={isRefreshing}
               aria-label={`Sync ${vehicle.id} telemetry`}
@@ -174,71 +172,80 @@ export function VehicleStatusCard({
           </div>
         </div>
 
-        {/* Battery Readout & Segmented Bar */}
-        <div>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              fontSize: "11px",
-              marginBottom: "3px",
-            }}
-          >
-            <span className="c2-kv-label">BATTERY LEVEL</span>
-            <span className="c2-mono">
+        {/* Battery Module Readout */}
+        <div style={{ background: "var(--sf-base)", padding: "8px 10px", borderRadius: "3px", border: "1px solid var(--border-subtle)" }}>
+          <div className="battery-large-container">
+            <span className="data-label">BATTERY LEVEL</span>
+            <span
+              className="battery-large-readout"
+              style={{
+                color:
+                  vehicle.battery < 20
+                    ? "var(--status-critical-bright)"
+                    : vehicle.battery <= 40
+                      ? "var(--status-warning)"
+                      : "var(--text-primary)",
+              }}
+            >
               {telemetryUnavailable
-                ? "UNAVAILABLE (OFFLINE)"
+                ? "OFFLINE"
                 : `${vehicle.battery.toFixed(1)}%${telemetryUnverified ? " [LAST KNOWN]" : ""}`}
             </span>
           </div>
-          <div className="c2-battery-track" aria-label={`${vehicle.id} battery bar`}>
-            <div
-              className="c2-battery-fill"
-              style={{
-                width: `${Math.max(0, Math.min(100, vehicle.battery))}%`,
-                backgroundColor: getBatteryColor(vehicle.battery),
-              }}
-            />
+
+          {/* 16-Segment Battery Display */}
+          <div className="battery-segments" aria-label={`${vehicle.id} battery bar`}>
+            {Array.from({ length: 16 }).map((_, idx) => {
+              const activeCount = Math.round((vehicle.battery / 100) * 16);
+              const isActive = idx < activeCount;
+              const segClass = isActive
+                ? vehicle.battery < 20
+                  ? "critical"
+                  : vehicle.battery <= 40
+                    ? "warning"
+                    : "filled"
+                : "";
+              return (
+                <div
+                  key={idx}
+                  className={`battery-segment ${segClass}`}
+                />
+              );
+            })}
           </div>
         </div>
 
-        {/* Key-Value Monospace Telemetry Grid */}
-        <div className="c2-kv-grid">
-          <div className="c2-kv-item">
-            <span className="c2-kv-label">POS X</span>
-            <span className="c2-kv-value">
-              {telemetryUnavailable
-                ? "--"
-                : `${vehicle.position.x.toFixed(2)}m`}
-            </span>
+        {/* Monospace Telemetry Grid */}
+        <div className="data-grid">
+          <div className="data-cell">
+            <div className="data-label">POS X</div>
+            <div className="data-value">
+              {telemetryUnavailable ? "--" : `${vehicle.position.x.toFixed(2)}m`}
+            </div>
           </div>
-          <div className="c2-kv-item">
-            <span className="c2-kv-label">POS Y</span>
-            <span className="c2-kv-value">
-              {telemetryUnavailable
-                ? "--"
-                : `${vehicle.position.y.toFixed(2)}m`}
-            </span>
+          <div className="data-cell">
+            <div className="data-label">POS Y</div>
+            <div className="data-value">
+              {telemetryUnavailable ? "--" : `${vehicle.position.y.toFixed(2)}m`}
+            </div>
           </div>
-          <div className="c2-kv-item">
-            <span className="c2-kv-label">ALTITUDE</span>
-            <span className="c2-kv-value">
-              {telemetryUnavailable
-                ? "--"
-                : `${vehicle.position.alt.toFixed(2)}m`}
-            </span>
+          <div className="data-cell">
+            <div className="data-label">ALTITUDE</div>
+            <div className="data-value data-value-accent">
+              {telemetryUnavailable ? "--" : `${vehicle.position.alt.toFixed(2)}m`}
+            </div>
           </div>
-          <div className="c2-kv-item">
-            <span className="c2-kv-label">HEARTBEAT</span>
-            <span className="c2-kv-value">
+          <div className="data-cell">
+            <div className="data-label">HEARTBEAT</div>
+            <div className="data-value" style={{ fontSize: "11px" }}>
               {formatTacticalTimestamp(vehicle.lastHeartbeat)}
-            </span>
+            </div>
           </div>
         </div>
 
-        <div className="c2-kv-item">
-          <span className="c2-kv-label">ACTIVE TASK</span>
-          <span className="c2-kv-value">{currentTaskLabel}</span>
+        <div className="data-row">
+          <span className="data-row-label">ACTIVE TASK</span>
+          <span className="data-row-value">{currentTaskLabel}</span>
         </div>
 
         {warningText && (
@@ -247,7 +254,7 @@ export function VehicleStatusCard({
               vehicle.status === "EMERGENCY_STOPPED" ||
               vehicle.status === "FAULT"
                 ? "c2-alert-error"
-                : "c2-alert-warning"
+                : "c2-alert-warn"
             }`}
             role="status"
           >

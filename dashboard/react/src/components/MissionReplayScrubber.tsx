@@ -58,36 +58,38 @@ export function MissionReplayScrubber(): React.JSX.Element {
   const selectedEntry = entries[selectedIndex] ?? null;
 
   return (
-    <section className="c2-panel" aria-label="Mission Replay Scrubber">
-      <div className="c2-panel-header">
-        <h2 className="c2-panel-title">
-          POST-HOC MISSION REPLAY SCRUBBER (READ-ONLY)
+    <section className="panel" aria-label="Mission Replay Scrubber">
+      <div className="panel-header">
+        <h2 className="panel-title">
+          MISSION REPLAY (READ-ONLY)
         </h2>
-        <span className="c2-panel-meta">
+        <span className="panel-meta">
           {loadedMissionId
             ? `${loadedMissionId} // ${entries.length} ENTRIES`
             : "STANDBY"}
         </span>
       </div>
 
-      <div className="c2-panel-body">
+      <div className="panel-body">
         <form
           onSubmit={(e) => void handleLoadReplay(e)}
-          style={{ display: "flex", gap: "6px" }}
+          style={{ display: "flex", gap: "4px" }}
         >
           <input
             type="text"
-            className="c2-input"
+            className="input"
             aria-label="Replay Mission ID"
             placeholder="Mission ID (e.g. M001)"
             value={missionIdInput}
             onChange={(e) => setMissionIdInput(e.target.value)}
+            style={{ fontSize: "11px", padding: "4px 8px" }}
           />
           <button
             type="submit"
-            className="c2-btn"
+            className="btn btn-secondary"
             disabled={loading}
             aria-label="Load Mission Replay"
+            style={{ fontSize: "10px", padding: "4px 10px", whiteSpace: "nowrap" }}
           >
             {loading ? "LOADING..." : "LOAD REPLAY"}
           </button>
@@ -100,16 +102,16 @@ export function MissionReplayScrubber(): React.JSX.Element {
         )}
 
         {entries.length === 0 ? (
-          <div className="c2-log-viewport" style={{ color: "var(--text-muted)" }}>
+          <div style={{ color: "var(--text-muted)", fontSize: "11px", padding: "8px 0" }}>
             {loadedMissionId
               ? `No replay timeline entries recorded for mission ${loadedMissionId}.`
-              : "Load a completed or active mission ID to inspect chronological events and reasoning traces."}
+              : "Load mission ID to inspect chronological events and reasoning traces."}
           </div>
         ) : (
           <>
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <label htmlFor="replay-timeline-slider" className="c2-kv-label">
-                TIMELINE STEP ({selectedIndex + 1}/{entries.length})
+              <label htmlFor="replay-timeline-slider" className="data-label" style={{ whiteSpace: "nowrap" }}>
+                STEP ({selectedIndex + 1}/{entries.length})
               </label>
               <input
                 id="replay-timeline-slider"
@@ -118,13 +120,12 @@ export function MissionReplayScrubber(): React.JSX.Element {
                 max={Math.max(0, entries.length - 1)}
                 value={selectedIndex}
                 onChange={(e) => setSelectedIndex(Number(e.target.value))}
-                style={{ flex: 1 }}
+                style={{ flex: 1, accentColor: "var(--accent-primary)" }}
               />
             </div>
 
             <div
-              className="c2-log-viewport"
-              style={{ maxHeight: "130px" }}
+              style={{ display: "flex", flexDirection: "column", gap: "2px", maxHeight: "80px", overflowY: "auto" }}
               role="listbox"
               aria-label="Replay Timeline Entries"
             >
@@ -145,20 +146,23 @@ export function MissionReplayScrubber(): React.JSX.Element {
                     role="option"
                     aria-selected={isSelected}
                     onClick={() => setSelectedIndex(idx)}
-                    className={`c2-btn ${
-                      isSelected ? "c2-btn-active" : "c2-btn-secondary"
+                    className={`btn ${
+                      isSelected ? "btn-primary" : "btn-secondary"
                     }`}
                     style={{
                       justifyContent: "space-between",
                       textAlign: "left",
                       width: "100%",
+                      fontSize: "10px",
+                      padding: "3px 6px",
+                      fontFamily: "var(--font-data)",
                     }}
                   >
-                    <span>
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       #{idx + 1} [{formatTacticalTimestamp(item.timestamp)}]{" "}
                       {summary}
                     </span>
-                    <span>{labelId}</span>
+                    <span style={{ flexShrink: 0, marginLeft: "6px" }}>{labelId}</span>
                   </button>
                 );
               })}
@@ -166,8 +170,8 @@ export function MissionReplayScrubber(): React.JSX.Element {
 
             {selectedEntry && (
               <div
-                className="c2-kv-item"
-                style={{ flexDirection: "column", gap: "4px" }}
+                className="data-cell"
+                style={{ background: "var(--sf-base)" }}
                 data-testid="replay-selected-detail"
               >
                 <div
@@ -175,32 +179,34 @@ export function MissionReplayScrubber(): React.JSX.Element {
                     display: "flex",
                     justifyContent: "space-between",
                     width: "100%",
+                    marginBottom: "3px",
                   }}
                 >
-                  <span className="c2-kv-label">
-                    SELECTED ENTRY // {selectedEntry.entry_type.toUpperCase()}
+                  <span className="data-label">
+                    ENTRY // {selectedEntry.entry_type.toUpperCase()}
                   </span>
-                  <span className="c2-mono" style={{ fontSize: "11px" }}>
+                  <span style={{ fontFamily: "var(--font-data)", fontSize: "10px", color: "var(--text-muted)" }}>
                     {formatTacticalTimestamp(selectedEntry.timestamp)}
                   </span>
                 </div>
 
                 {selectedEntry.entry_type === "event" && selectedEntry.event && (
-                  <div className="c2-mono" style={{ fontSize: "12px" }}>
+                  <div style={{ fontFamily: "var(--font-data)", fontSize: "11px", color: "var(--text-primary)" }}>
                     [{selectedEntry.event.category}] {selectedEntry.event.message}
                   </div>
                 )}
 
                 {selectedEntry.entry_type === "reasoning_trace" &&
                   selectedEntry.reasoning_trace && (
-                    <div style={{ fontSize: "12px" }}>
-                      <div className="c2-mono" style={{ color: "var(--accent-sage)" }}>
+                    <div style={{ fontSize: "11px" }}>
+                      <div style={{ fontFamily: "var(--font-data)", color: "var(--marker-scout)" }}>
                         TRIGGER: {selectedEntry.reasoning_trace.trigger}
                       </div>
-                      <div>{selectedEntry.reasoning_trace.rationale}</div>
+                      <div style={{ color: "var(--text-primary)", marginTop: "2px" }}>
+                        {selectedEntry.reasoning_trace.rationale}
+                      </div>
                       <div
-                        className="c2-mono"
-                        style={{ color: "var(--text-secondary)", fontSize: "11px" }}
+                        style={{ fontFamily: "var(--font-data)", color: "var(--text-muted)", fontSize: "10px", marginTop: "2px" }}
                       >
                         TASKS:{" "}
                         {selectedEntry.reasoning_trace.resulting_task_ids.join(
@@ -211,12 +217,13 @@ export function MissionReplayScrubber(): React.JSX.Element {
                   )}
 
                 <div
-                  className="c2-mono"
                   style={{
-                    fontSize: "11px",
-                    color: "var(--text-secondary)",
+                    fontFamily: "var(--font-data)",
+                    fontSize: "10px",
+                    color: "var(--text-muted)",
                     borderTop: "1px solid var(--border-subtle)",
-                    paddingTop: "4px",
+                    paddingTop: "3px",
+                    marginTop: "4px",
                     width: "100%",
                   }}
                 >

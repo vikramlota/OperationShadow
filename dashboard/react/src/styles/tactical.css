@@ -1,435 +1,858 @@
-/* Operation Shadow — Military Tactical Command-and-Control Design System
- * Implements docs/ui-design-spec.md and AGENTS.md §3.
+/* Operation Shadow — Aerospace Tactical Command & Control Design System
+ * Implements approved design specification: design-system-proposal.md
  */
 
+/* ====================================================================
+   1. DESIGN TOKENS
+   ==================================================================== */
 :root {
-  --bg-canvas: #0a0d0c;
-  --bg-panel: #111614;
-  --bg-panel-header: #171e1b;
-  --bg-recessed: #0d110f;
-  --border-subtle: #26302b;
-  --border-tactical: #4a5d3f;
-  --grid-line: #1a221e;
+  /* Surfaces (dark obsidian → graphite) */
+  --sf-void:      #08090A;
+  --sf-base:      #0D0F10;
+  --sf-raised:    #131618;
+  --sf-elevated:  #1A1D20;
+  --sf-overlay:   #21252A;
 
-  --text-primary: #e6e8e1;
-  --text-secondary: #9ca59b;
-  --text-muted: #636e64;
+  /* Borders */
+  --border-subtle:  #1E2226;
+  --border-visible: #2A3038;
+  --border-focus:   #5A7A6A;
 
-  --accent-olive: #4a5d3f;
-  --accent-military: #5c744d;
-  --accent-sage: #8aa37b;
-  --marker-hawk: #7a9a95;
+  /* Text Hierarchy */
+  --text-primary:   #E2E4DE;
+  --text-secondary: #8A8F8C;
+  --text-muted:     #4E5553;
+  --text-inverse:   #0D0F10;
 
-  --status-warning: #d98a2b;
-  --status-critical: #c93535;
-  --status-critical-bright: #e03e3e;
+  /* Status Colors */
+  --status-nominal:         #5A8A6A;
+  --status-nominal-muted:   #1A2A22;
+  --status-warning:         #C8882A;
+  --status-warning-muted:   #2C2418;
+  --status-critical:        #C43030;
+  --status-critical-bright: #E04040;
+  --status-critical-muted:  #2C1818;
 
-  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-mono: "JetBrains Mono", "SFMono-Regular", "Menlo", "Consolas", monospace;
+  /* Tactical Accents */
+  --accent-primary: #5A8A6A;
+  --accent-hover:   #6A9A7A;
+  --accent-active:  #4A7A5A;
+  --marker-scout:   #7AAA8A;
+  --marker-hawk:    #7A9A95;
+
+  /* Typography */
+  --font-display: 'Michroma', sans-serif;
+  --font-ui:      'Space Grotesk', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-data:    'IBM Plex Mono', 'SF Mono', 'Menlo', 'Consolas', monospace;
+
+  /* Legacy CSS Variable Compatibility */
+  --bg-canvas: var(--sf-void);
+  --bg-panel: var(--sf-raised);
+  --bg-panel-header: var(--sf-elevated);
+  --bg-recessed: var(--sf-base);
+  --accent-olive: var(--accent-primary);
+  --accent-military: var(--accent-active);
+  --accent-sage: var(--marker-scout);
+  --font-sans: var(--font-ui);
+  --font-mono: var(--font-data);
 }
 
-*,
-*::before,
-*::after {
+/* ====================================================================
+   2. RESET & BASE STYLES
+   ==================================================================== */
+*, *::before, *::after {
   box-sizing: border-box;
-}
-
-html,
-body,
-#root {
   margin: 0;
   padding: 0;
+}
+
+html, body, #root {
   width: 100%;
+  height: 100%;
   min-height: 100vh;
-  background-color: var(--bg-canvas);
+  background-color: var(--sf-void);
   color: var(--text-primary);
-  font-family: var(--font-sans);
+  font-family: var(--font-ui);
   font-size: 13px;
-  line-height: 1.4;
+  line-height: 1.45;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
 }
 
+/* Scrollbars */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-visible);
+}
+
+/* ====================================================================
+   3. APP SHELL & GRID LAYOUT
+   ==================================================================== */
+.app-shell {
+  display: grid;
+  grid-template-rows: 42px 1fr minmax(180px, 220px);
+  grid-template-columns: 260px 1fr 320px;
+  grid-template-areas:
+    "header  header  header"
+    "left    map     right"
+    "dock    dock    dock";
+  gap: 4px;
+  height: 100vh;
+  padding: 4px;
+  background: var(--sf-void);
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+/* Backward compatibility for c2-shell */
 .c2-shell {
-  display: grid;
-  grid-template-rows: auto auto 1fr;
-  gap: 6px;
-  padding: 6px;
-  min-height: 100vh;
-  background-color: var(--bg-canvas);
+  composes: app-shell;
 }
 
-/* Global Operations Bar */
-.c2-topbar {
+/* ====================================================================
+   4. HEADER BAR
+   ==================================================================== */
+.header {
+  grid-area: header;
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
+  padding: 0 12px;
+  background: var(--sf-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  gap: 12px;
+  min-height: 42px;
+}
+
+.header-brand {
+  display: flex;
+  align-items: center;
   gap: 10px;
-  min-height: 48px;
-  padding: 6px 10px;
-  background-color: var(--bg-panel-header);
-  border: 1px solid var(--border-subtle);
-  border-left: 3px solid var(--accent-olive);
-  border-radius: 2px;
+  flex-shrink: 0;
 }
 
-.c2-topbar-left,
-.c2-topbar-center,
-.c2-topbar-right {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
+.header-brand-mark {
+  width: 5px;
+  height: 20px;
+  background: var(--accent-primary);
+  border-radius: 1px;
 }
 
-.c2-brand-title {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+.header-brand-name {
+  font-family: var(--font-display);
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  color: var(--text-primary);
   text-transform: uppercase;
-  color: var(--text-primary);
-}
-
-.c2-brand-subtitle {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--accent-sage);
-}
-
-/* Degraded / Warning Global Banner */
-.c2-global-banner {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 5px 10px;
-  background-color: #1d160b;
-  border: 1px solid var(--status-warning);
-  border-left: 3px solid var(--status-warning);
-  border-radius: 2px;
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: 11px;
-}
-
-/* 3-Column Tactical Grid */
-.c2-workstation-grid {
-  display: grid;
-  grid-template-columns: 310px minmax(420px, 1fr) 360px;
-  gap: 6px;
-  align-items: start;
-}
-
-@media (max-width: 1200px) {
-  .c2-workstation-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-.c2-column {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-/* Operational Panel */
-.c2-panel {
-  background-color: var(--bg-panel);
-  border: 1px solid var(--border-subtle);
-  border-radius: 2px;
-  display: flex;
-  flex-direction: column;
-}
-
-.c2-panel-selected {
-  border-color: var(--border-tactical);
-}
-
-.c2-panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 28px;
-  padding: 4px 8px;
-  background-color: var(--bg-panel-header);
-  border-bottom: 1px solid var(--border-subtle);
-  border-left: 3px solid var(--accent-olive);
-}
-
-.c2-panel-title {
   margin: 0;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-primary);
 }
 
-.c2-panel-meta {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
-}
-
-.c2-panel-body {
-  padding: 8px;
+.header-status {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+  flex: 1;
 }
 
-/* Badges & Status Chips */
-.c2-badge {
+.header-estop {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* ====================================================================
+   5. BADGES & CHIPS
+   ==================================================================== */
+.badge {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 6px;
-  border-radius: 2px;
-  font-family: var(--font-mono);
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 3px;
+  font-family: var(--font-data);
   font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
   border: 1px solid var(--border-subtle);
-  background-color: var(--bg-recessed);
+  background: #14171A;
   color: var(--text-secondary);
 }
 
-.c2-badge-nominal {
-  border-color: var(--accent-military);
-  background-color: #162014;
-  color: var(--accent-sage);
+.badge-nominal {
+  background: var(--status-nominal-muted);
+  color: #7AAA8A;
+  border-color: #2A4A35;
 }
 
-.c2-badge-warning {
-  border-color: var(--status-warning);
-  background-color: #24190a;
-  color: #f3b35f;
+.badge-warning {
+  background: var(--status-warning-muted);
+  color: #D8A850;
+  border-color: #4A3A1A;
 }
 
-.c2-badge-critical {
-  border-color: var(--status-critical-bright);
-  background-color: #291010;
-  color: #ff9494;
+.badge-critical {
+  background: var(--status-critical-muted);
+  color: #E86060;
+  border-color: #4A1818;
 }
 
-.c2-badge-muted {
-  border-color: var(--border-subtle);
-  background-color: var(--bg-recessed);
+.badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.badge-dot-nominal {
+  background: var(--status-nominal);
+}
+
+.badge-dot-warning {
+  background: var(--status-warning);
+  animation: pulse-dot 2s infinite ease-in-out;
+}
+
+.badge-dot-critical {
+  background: var(--status-critical-bright);
+  animation: pulse-dot 1s infinite ease-in-out;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.9); }
+}
+
+/* Legacy c2-badge aliases */
+.c2-badge { composes: badge; }
+.c2-badge-nominal { composes: badge-nominal; }
+.c2-badge-warning { composes: badge-warning; }
+.c2-badge-critical { composes: badge-critical; }
+
+/* ====================================================================
+   6. BUTTONS
+   ==================================================================== */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 3px;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background 120ms ease, border-color 120ms ease, transform 60ms ease;
+  user-select: none;
+}
+.btn:active {
+  transform: translateY(1px);
+}
+
+.btn-primary {
+  background: var(--accent-primary);
+  border-color: var(--accent-hover);
+  color: var(--text-inverse);
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.btn-secondary {
+  background: var(--sf-elevated);
+  border-color: var(--border-visible);
+  color: var(--text-primary);
+}
+.btn-secondary:hover:not(:disabled) {
+  background: var(--sf-overlay);
+  border-color: #38424E;
+}
+
+.btn-danger {
+  background: var(--status-critical);
+  border-color: #E86060;
+  color: #FFFFFF;
+  font-family: var(--font-data);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.btn-danger:hover:not(:disabled) {
+  background: var(--status-critical-bright);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Button with subtle glowing border */
+.btn-active {
+  background: var(--accent-primary);
+  color: var(--text-inverse);
+  border-color: #8AA898;
+}
+
+/* Legacy c2-btn aliases */
+.c2-btn {
+  composes: btn;
+  background: var(--accent-primary);
+  color: var(--text-inverse);
+}
+.c2-btn-secondary { composes: btn-secondary; }
+.c2-btn-active { composes: btn-active; }
+
+/* ====================================================================
+   7. PANELS & FRAMING
+   ==================================================================== */
+.panel {
+  background: var(--sf-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 12px;
+  min-height: 32px;
+  background: var(--sf-elevated);
+  border-bottom: 1px solid var(--border-subtle);
+  border-left: 2px solid var(--accent-primary);
+  flex-shrink: 0;
+}
+
+.panel-title {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.panel-meta {
+  font-family: var(--font-data);
+  font-size: 10px;
   color: var(--text-muted);
 }
 
-/* Monospace Telemetry Grid */
-.c2-mono {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-}
-
-.c2-kv-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px 8px;
-}
-
-.c2-kv-item {
+.panel-body {
+  padding: 10px 12px;
   display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  padding: 3px 6px;
-  background-color: var(--bg-recessed);
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/* Legacy c2-panel aliases */
+.c2-panel { composes: panel; }
+.c2-panel-header { composes: panel-header; }
+.c2-panel-title { composes: panel-title; }
+.c2-panel-meta { composes: panel-meta; }
+.c2-panel-body { composes: panel-body; }
+
+/* ====================================================================
+   8. THREE REGIONS & BOTTOM DOCK
+   ==================================================================== */
+.left-rail {
+  grid-area: left;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.center-map {
+  grid-area: map;
+  display: flex;
+  flex-direction: column;
+  background: var(--sf-raised);
   border: 1px solid var(--border-subtle);
-  border-radius: 2px;
+  border-radius: 3px;
+  overflow: hidden;
+  min-height: 0;
 }
 
-.c2-kv-label {
+.right-rail {
+  grid-area: right;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.ops-dock {
+  grid-area: dock;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 4px;
+  min-height: 0;
+  max-height: 220px;
+}
+
+/* ====================================================================
+   9. DATA READOUT COMPONENTS
+   ==================================================================== */
+.data-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.data-cell {
+  background: var(--sf-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  padding: 6px 8px;
+}
+
+.data-label {
+  font-family: var(--font-ui);
   font-size: 10px;
-  text-transform: uppercase;
+  font-weight: 500;
   letter-spacing: 0.05em;
-  color: var(--text-secondary);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 2px;
 }
 
-.c2-kv-value {
-  font-family: var(--font-mono);
+.data-value {
+  font-family: var(--font-data);
   font-size: 12px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   color: var(--text-primary);
 }
 
-/* Segmented Battery Bar */
-.c2-battery-track {
-  width: 100%;
-  height: 8px;
-  background-color: var(--bg-recessed);
+.data-value-accent {
+  color: var(--marker-scout);
+}
+
+.data-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 4px 0;
+  border-bottom: 1px solid #141618;
+  font-size: 11px;
+}
+
+.data-row-label {
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: 11px;
+}
+
+.data-row-value {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+/* Battery Readout & Gauge */
+.battery-large-container {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.battery-large-readout {
+  font-family: var(--font-data);
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+
+.battery-bar {
+  height: 6px;
+  background: #141618;
   border: 1px solid var(--border-subtle);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.battery-fill {
+  height: 100%;
+  background: var(--status-nominal);
   border-radius: 1px;
+  transition: width 240ms ease-out;
+}
+
+/* 16-Segment Battery Bar */
+.battery-segments {
+  display: flex;
+  gap: 2px;
+  height: 8px;
+  margin-top: 4px;
+}
+
+.battery-segment {
+  flex: 1;
+  background: #161A1D;
+  border-radius: 1px;
+  transition: background 180ms ease;
+}
+
+.battery-segment.filled {
+  background: var(--status-nominal);
+}
+
+.battery-segment.warning {
+  background: var(--status-warning);
+}
+
+.battery-segment.critical {
+  background: var(--status-critical-bright);
+}
+
+/* ====================================================================
+   10. MAP VIEWPORT & TOOLBAR
+   ==================================================================== */
+.map-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: var(--sf-elevated);
+  border-bottom: 1px solid var(--border-subtle);
+  border-left: 2px solid var(--accent-primary);
+  flex-shrink: 0;
+}
+
+.map-viewport {
+  flex: 1;
+  background: var(--sf-void);
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
   overflow: hidden;
 }
 
-.c2-battery-fill {
-  height: 100%;
-  transition: width 120ms linear;
+.map-toolbar {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  z-index: 2;
 }
 
-/* Buttons & Inputs */
-.c2-input,
-.c2-select {
-  width: 100%;
-  padding: 5px 8px;
-  background-color: var(--bg-recessed);
+.map-toolbar .btn-secondary {
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  min-width: 28px;
+  background: rgba(26, 29, 32, 0.85);
+  backdrop-filter: blur(4px);
+}
+
+/* Waypoint HUD popover card */
+.waypoint-hud-card {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  padding: 8px 12px;
+  background: rgba(13, 15, 16, 0.92);
+  border: 1px solid var(--border-visible);
+  border-left: 3px solid var(--accent-primary);
+  border-radius: 3px;
+  backdrop-filter: blur(4px);
+  z-index: 3;
+  font-family: var(--font-data);
+  font-size: 11px;
+}
+
+/* ====================================================================
+   11. CAMERA FEED & HUD RETICLES
+   ==================================================================== */
+.camera-viewport {
+  background: var(--sf-void);
   border: 1px solid var(--border-subtle);
-  border-radius: 2px;
-  color: var(--text-primary);
-  font-family: var(--font-sans);
-  font-size: 12px;
-}
-
-.c2-input:focus-visible,
-.c2-select:focus-visible,
-.c2-btn:focus-visible,
-.c2-estop-btn:focus-visible {
-  outline: 2px solid var(--accent-sage);
-  outline-offset: 1px;
-}
-
-.c2-btn {
-  display: inline-flex;
+  border-radius: 3px;
+  aspect-ratio: 16/9;
+  position: relative;
+  overflow: hidden;
+  display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  padding: 5px 10px;
-  background-color: var(--accent-olive);
-  border: 1px solid var(--accent-military);
-  border-radius: 2px;
+}
+
+.camera-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 6px 8px;
+  z-index: 2;
+}
+
+.camera-overlay-top,
+.camera-overlay-bottom {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--font-data);
+  font-size: 10px;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+}
+
+/* Reticle corners */
+.reticle-corners {
+  position: absolute;
+  inset: 6px;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.reticle-corners::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0;
+  width: 12px; height: 12px;
+  border-top: 1px solid var(--accent-primary);
+  border-left: 1px solid var(--accent-primary);
+}
+
+.reticle-corners::after {
+  content: '';
+  position: absolute;
+  bottom: 0; right: 0;
+  width: 12px; height: 12px;
+  border-bottom: 1px solid var(--accent-primary);
+  border-right: 1px solid var(--accent-primary);
+}
+
+/* ====================================================================
+   12. INPUTS & FORM CONTROLS
+   ==================================================================== */
+.input {
+  width: 100%;
+  padding: 6px 10px;
+  background: var(--sf-base);
+  border: 1px solid var(--border-visible);
+  border-radius: 3px;
   color: var(--text-primary);
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  outline: none;
+  transition: border-color 120ms ease;
+  box-sizing: border-box;
+}
+
+.input:focus {
+  border-color: var(--border-focus);
+}
+
+.input::placeholder {
+  color: var(--text-muted);
+}
+
+/* Legacy c2-input alias */
+.c2-input { composes: input; }
+
+/* ====================================================================
+   13. LOG ENTRIES (Event Log, Reasoning Trace, Replay)
+   ==================================================================== */
+.log-entry {
+  padding: 5px 8px;
+  border-left: 2px solid var(--border-subtle);
   font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  cursor: pointer;
+  line-height: 1.4;
+  background: #0E1113;
+  border-radius: 0 2px 2px 0;
 }
 
-.c2-btn:hover:not(:disabled) {
-  background-color: var(--accent-military);
+.log-entry + .log-entry {
+  margin-top: 3px;
 }
 
-.c2-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+.log-entry-nominal {
+  border-left-color: var(--status-nominal);
 }
 
-.c2-btn-secondary {
-  background-color: var(--bg-recessed);
-  border-color: var(--border-subtle);
+.log-entry-warning {
+  border-left-color: var(--status-warning);
+}
+
+.log-entry-critical {
+  border-left-color: var(--status-critical);
+}
+
+.log-meta {
+  font-family: var(--font-data);
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+.log-text {
   color: var(--text-secondary);
 }
 
-.c2-btn-secondary:hover:not(:disabled) {
-  border-color: var(--accent-military);
-  color: var(--text-primary);
-}
-
-.c2-btn-active {
-  background-color: var(--accent-olive);
-  border-color: var(--accent-sage);
-  color: var(--text-primary);
-}
-
-/* Emergency Stop Control */
-.c2-estop-container {
+/* Mission task entry */
+.task-entry {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 6px 8px;
-  background-color: #1c0c0c;
-  border: 1px solid var(--status-critical-bright);
-  border-radius: 2px;
-}
-
-.c2-estop-controls {
-  display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  justify-content: space-between;
+  padding: 5px 8px;
+  border-radius: 3px;
+  font-family: var(--font-data);
+  font-size: 11px;
+  gap: 8px;
 }
 
-.c2-estop-btn {
-  padding: 6px 12px;
-  background-color: var(--status-critical);
-  border: 1px solid #ff6b6b;
-  border-radius: 2px;
-  color: #ffffff;
-  font-family: var(--font-mono);
-  font-size: 12px;
+.task-done {
+  background: var(--status-nominal-muted);
+  color: #7AAA8A;
+}
+
+.task-active {
+  background: #1A2A22;
+  border: 1px solid #2A4A35;
+  color: var(--text-primary);
+}
+
+.task-queued {
+  background: var(--sf-base);
+  color: var(--text-muted);
+}
+
+.task-status {
+  font-size: 9px;
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  cursor: pointer;
-}
-
-.c2-estop-btn:hover:not(:disabled) {
-  background-color: var(--status-critical-bright);
-}
-
-.c2-estop-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-/* Scrollable Log Viewports */
-.c2-log-viewport {
-  max-height: 200px;
-  overflow-y: auto;
-  background-color: var(--bg-recessed);
-  border: 1px solid var(--border-subtle);
+  padding: 1px 6px;
   border-radius: 2px;
-  padding: 4px;
+  letter-spacing: 0.06em;
+  flex-shrink: 0;
+}
+
+/* Radar pulse animation */
+@keyframes radar-pulse {
+  0% { r: 6; opacity: 0.7; }
+  100% { r: 24; opacity: 0; }
+}
+.radar-ring {
+  animation: radar-pulse 2.2s infinite ease-out;
+}
+
+/* Section display heading (Michroma) */
+.section-display {
+  font-family: var(--font-display);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+/* ====================================================================
+   14. FAST-PATH EMERGENCY STOP COMPONENT STYLING
+   ==================================================================== */
+.c2-estop-container {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.c2-log-entry {
-  padding: 4px 6px;
-  border-left: 2px solid var(--accent-military);
-  background-color: var(--bg-panel);
-  font-size: 12px;
+.c2-estop-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
-.c2-log-entry-warning {
-  border-left-color: var(--status-warning);
+.c2-estop-btn {
+  background: var(--status-critical);
+  border: 1px solid #E86060;
+  color: #FFFFFF;
+  font-family: var(--font-data);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 5px 12px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 120ms ease;
 }
 
-.c2-log-entry-critical {
-  border-left-color: var(--status-critical-bright);
+.c2-estop-btn:hover:not(:disabled) {
+  background: var(--status-critical-bright);
 }
 
 .c2-alert-box {
-  padding: 6px 8px;
-  border-radius: 2px;
-  font-family: var(--font-mono);
+  padding: 6px 10px;
+  border-radius: 3px;
+  font-family: var(--font-data);
   font-size: 11px;
+  border: 1px solid var(--border-subtle);
+  background: var(--sf-base);
 }
 
 .c2-alert-error {
-  background-color: #291010;
-  border: 1px solid var(--status-critical-bright);
-  color: #ffb3b3;
+  border-color: #5A2020;
+  background: #1C0F0F;
+  color: #F0A0A0;
 }
 
-.c2-alert-warning {
-  background-color: #24190a;
-  border: 1px solid var(--status-warning);
-  color: #f3b35f;
+.c2-alert-warn {
+  border-color: #5A4010;
+  background: #1F180B;
+  color: #E0C070;
 }
 
 .c2-alert-info {
-  background-color: #141d12;
-  border: 1px solid var(--accent-military);
-  color: var(--accent-sage);
+  border-color: #204A30;
+  background: #0E1B13;
+  color: #8AD0A0;
+}
+
+/* Key-value label & mono helpers */
+.c2-mono {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+
+.c2-kv-label {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  text-transform: uppercase;
 }

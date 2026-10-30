@@ -26,137 +26,123 @@ export function CameraFeed(): React.JSX.Element {
   };
 
   return (
-    <section className="c2-panel" aria-label="Camera Feed">
-      <div className="c2-panel-header">
-        <h2 className="c2-panel-title">
-          DIRECT MJPEG OPTICAL FEED // {selectedCamera}
+    <section className="panel" aria-label="Camera Feed">
+      <div className="panel-header">
+        <h2 className="panel-title">
+          OPTICAL FEED // {selectedCamera}
         </h2>
-        <span className="c2-badge">
-          {vehicleState?.mode === "simulated" ? "SIMULATED VEHICLE" : "REAL VEHICLE"}
+        <span className="badge">
+          {vehicleState.mode === "simulated" ? "SIMULATED" : "REAL"}
         </span>
       </div>
 
-      <div className="c2-panel-body">
-        <div style={{ display: "flex", gap: "6px" }}>
-          <button
-            type="button"
-            className="c2-btn c2-btn-active"
-            aria-pressed={true}
-            aria-label="Select SCOUT01 Camera Feed"
-          >
-            SCOUT01 [CAM-01]
-          </button>
-        </div>
-
-        <form
-          onSubmit={handleApplyStreamUrl}
-          style={{ display: "flex", gap: "6px" }}
-        >
-          <input
-            type="url"
-            className="c2-input"
-            aria-label={`${selectedCamera} MJPEG Stream URL`}
-            placeholder="Configure direct vehicle MJPEG stream URL (http://...)"
-            value={urlInput}
-            onChange={(e) => setUrlInput(e.target.value)}
-          />
-          <button type="submit" className="c2-btn c2-btn-secondary">
-            SET URL
-          </button>
-        </form>
-
+      <div className="panel-body">
         <div
-          style={{
-            minHeight: "150px",
-            backgroundColor: "var(--bg-recessed)",
-            border: "1px solid var(--border-subtle)",
-            borderRadius: "2px",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: "12px",
-            textAlign: "center",
-          }}
+          className="camera-viewport"
           data-testid="camera-viewport"
         >
+          <div className="reticle-corners" />
+
+          {/* Tactical Optical HUD Overlay */}
+          <div className="camera-overlay">
+            <div className="camera-overlay-top">
+              <span style={{ color: "var(--marker-scout)", fontWeight: 500 }}>
+                HDG: 042° NE // 30 FPS
+              </span>
+              <span className="badge badge-nominal" style={{ fontSize: "9px", padding: "1px 5px" }}>
+                DIRECT MJPEG
+              </span>
+            </div>
+            <div className="camera-overlay-bottom">
+              <span style={{ color: "var(--text-secondary)" }}>{selectedCamera} // FORWARD OPTICS</span>
+              <span style={{ color: "var(--text-secondary)" }}>
+                X: {vehicleState.position.x.toFixed(2)}m Y: {vehicleState.position.y.toFixed(2)}m
+              </span>
+            </div>
+          </div>
+
           {!activeUrl ? (
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: "8px",
-                alignItems: "center",
-              }}
-            >
-              <span
+            <div role="status" style={{ padding: "12px", textAlign: "center", zIndex: 1 }}>
+              <div
                 style={{
-                  color: "var(--amber-warning)",
-                  fontFamily: "var(--font-mono)",
+                  color: "var(--status-warning)",
+                  fontFamily: "var(--font-data)",
                   fontWeight: 600,
-                  fontSize: "12px",
-                  letterSpacing: "0.5px",
+                  fontSize: "11px",
                 }}
               >
                 CAMERA STREAM UNAVAILABLE // NO DIRECT MJPEG URL CONFIGURED
-              </span>
-              <p
+              </div>
+              <div
                 style={{
-                  fontSize: "11px",
                   color: "var(--text-muted)",
-                  margin: 0,
-                  maxWidth: "320px",
-                  lineHeight: "1.4",
+                  fontSize: "10px",
+                  marginTop: "4px",
+                  lineHeight: 1.4,
                 }}
               >
-                No direct HTTP MJPEG camera stream configured for {selectedCamera}. Per
-                Architecture §8.3, video is never relayed through the backend;
-                enter vehicle IP &amp; port above to view live optical stream.
-              </p>
+                Direct vehicle stream bypasses backend (AGENTS.md §8.3).
+              </div>
             </div>
           ) : hasError ? (
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: "8px",
-                alignItems: "center",
-              }}
-            >
-              <span
+            <div role="alert" style={{ padding: "12px", textAlign: "center", zIndex: 1 }}>
+              <div
                 style={{
-                  color: "var(--crimson-alert)",
-                  fontFamily: "var(--font-mono)",
+                  color: "var(--status-critical-bright)",
+                  fontFamily: "var(--font-data)",
                   fontWeight: 600,
-                  fontSize: "12px",
+                  fontSize: "11px",
                 }}
               >
                 CAMERA STREAM ERROR // DIRECT MJPEG FEED UNREACHABLE
-              </span>
-              <p
+              </div>
+              <div
                 style={{
-                  fontSize: "11px",
                   color: "var(--text-muted)",
-                  margin: 0,
+                  fontFamily: "var(--font-data)",
+                  fontSize: "10px",
+                  marginTop: "4px",
                 }}
               >
                 Failed to load stream from {activeUrl}
-              </p>
+              </div>
             </div>
           ) : (
             <img
               src={activeUrl}
               alt={`${selectedCamera} direct MJPEG camera stream`}
-              onError={() => setStreamError(true)}
               style={{
                 width: "100%",
-                maxHeight: "240px",
-                objectFit: "contain",
+                height: "100%",
+                objectFit: "cover",
                 display: "block",
               }}
+              onError={() => setStreamError(true)}
             />
           )}
         </div>
+
+        <form
+          onSubmit={handleApplyStreamUrl}
+          style={{ display: "flex", gap: "4px" }}
+        >
+          <input
+            type="url"
+            className="input"
+            aria-label={`${selectedCamera} MJPEG Stream URL`}
+            placeholder="Stream URL (http://...)"
+            value={urlInput}
+            onChange={(e) => setUrlInput(e.target.value)}
+            style={{ fontSize: "11px", padding: "4px 8px" }}
+          />
+          <button
+            type="submit"
+            className="btn btn-secondary"
+            style={{ padding: "4px 10px", fontSize: "10px", whiteSpace: "nowrap" }}
+          >
+            SET URL
+          </button>
+        </form>
       </div>
     </section>
   );

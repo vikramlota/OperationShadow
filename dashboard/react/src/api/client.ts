@@ -325,6 +325,17 @@ export async function completeMission(
   );
 }
 
+export async function executeUltronSimulation(
+  missionId: string,
+): Promise<MissionDetailPayload> {
+  return requestJson<MissionDetailPayload>(
+    `/mission/${encodeURIComponent(missionId)}/execute-ultron`,
+    {
+      method: "POST",
+    },
+  );
+}
+
 export async function fetchVehicleStatus(
   vehicleId: VehicleId,
 ): Promise<VehicleReadPayload> {

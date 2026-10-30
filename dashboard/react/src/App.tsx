@@ -59,112 +59,86 @@ export default function App({
   const scout = state.vehicles.SCOUT01;
   const allSimulated = scout.mode === "simulated";
 
-  const globalWarnings: string[] = [];
-  if (allSimulated) {
-    globalWarnings.push(
-      "SIMULATION MODE ACTIVE — SCOUT01 IS RUNNING ON MOCK ADAPTER (NO PHYSICAL VEHICLE CONNECTED)",
-    );
-  }
-  if (!wsStatus.connected && wsStatus.lastError) {
-    globalWarnings.push(`WS STATUS: ${wsStatus.lastError}`);
-  }
-  for (const v of [scout]) {
-    if (v.status === "EMERGENCY_STOPPED") {
-      globalWarnings.push(`${v.id} IS IN EMERGENCY_STOPPED STATE`);
-    } else if (v.connection === "UNKNOWN" || v.status === "UNKNOWN") {
-      globalWarnings.push(`${v.id} HEARTBEAT TIMEOUT — STATE UNKNOWN`);
-    } else if (v.isStale) {
-      globalWarnings.push(`${v.id} TELEMETRY IS STALE`);
-    }
-  }
-
   return (
-    <main className="c2-shell">
-      {/* A. Global Operations Bar */}
-      <header className="c2-topbar" aria-label="Global Operations Bar">
-        <div className="c2-topbar-left">
-          <div>
-            <h1 className="c2-brand-title">
-              Operation Shadow — Mission Control
-            </h1>
-            <div className="c2-brand-subtitle">
-              INDOOR ROVER TACTICAL C2 WORKSTATION // SCOUT01
-            </div>
-          </div>
+    <main className="app-shell">
+      {/* 1. Header Bar: Brand, High-Signal Status Badges & E-Stop Fast-Path */}
+      <header className="header" aria-label="Global Operations Bar">
+        <div className="header-brand">
+          <div className="header-brand-mark" />
+          <h1 className="header-brand-name">
+            Operation Shadow — Mission Control
+          </h1>
         </div>
 
-        <div className="c2-topbar-center">
-          <span className="c2-badge">
-            MISSION: {state.activeMissionId ?? "NONE"} // Mission Status:{" "}
-            {state.missionStatus}
+        <div className="header-status">
+          <span className="badge">
+            <span
+              className={`badge-dot ${
+                state.missionStatus === "ACTIVE"
+                  ? "badge-dot-nominal"
+                  : "badge-dot-warning"
+              }`}
+            />
+            MISSION: {state.activeMissionId ?? "NONE"} // Mission Status: {state.missionStatus}
           </span>
+
           <span
-            className={`c2-badge ${
-              state.backendReachable ? "c2-badge-nominal" : "c2-badge-warning"
+            className={`badge ${
+              state.backendReachable ? "badge-nominal" : "badge-warning"
             }`}
           >
             API: {state.backendReachable ? "ONLINE" : "STANDBY"}
           </span>
+
           <span
-            className={`c2-badge ${
-              wsStatus.connected ? "c2-badge-nominal" : "c2-badge-warning"
+            className={`badge ${
+              wsStatus.connected ? "badge-nominal" : "badge-warning"
             }`}
           >
+            <span
+              className={`badge-dot ${
+                wsStatus.connected ? "badge-dot-nominal" : "badge-dot-warning"
+              }`}
+            />
             WS: {wsStatus.connected ? "LINKED (LIVE PUSH)" : "DISCONNECTED"}
           </span>
-          <span className="c2-badge c2-badge-warning">
+
+          <span className="badge badge-warning">
             OPERATING MODE:{" "}
             {allSimulated ? "SIMULATED (MOCK ADAPTERS)" : "MIXED / REAL"}
           </span>
+
+          <span className="badge" style={{ color: "var(--text-muted)" }}>
+            LOCKOUT: {state.hardwareLockout ? "ENGAGED" : "DISENGAGED"}
+          </span>
         </div>
 
-        <div className="c2-topbar-right">
+        <div className="header-estop">
           <EmergencyStopButton />
         </div>
       </header>
 
-      {/* Global Degraded / Simulation Notice Banner */}
-      <div
-        className="c2-global-banner"
-        role="status"
-        aria-label="Global Operational Warnings"
-      >
-        <span>{globalWarnings.join("  |  ")}</span>
-        <span>
-          LOCKOUT: {state.hardwareLockout ? "ENGAGED" : "DISENGAGED"}
-        </span>
-      </div>
+      {/* 2. Left Rail: Mission Command & Operating Mode Safety */}
+      <aside className="left-rail" aria-label="Command and Controls Rail">
+        <MissionPanel />
+        <SimulatedModeToggle />
+      </aside>
 
-      {/* 3-Column Tactical Workstation Grid */}
-      <div className="c2-workstation-grid">
-        {/* Left Rail: Mission Control, Vehicle Cards & Mode Control */}
-        <div className="c2-column" aria-label="Command and Vehicle Status Rail">
-          <MissionPanel />
-          <section
-            aria-label="Vehicles"
-            style={{ display: "flex", flexDirection: "column", gap: "6px" }}
-          >
-            <VehicleStatusCard vehicle={scout} />
-          </section>
-          <SimulatedModeToggle />
-        </div>
+      {/* 3. Center Column: Dominant Tactical Indoor Floor Map */}
+      <FloorMap />
 
-        {/* Center Focal Viewport: Tactical Indoor Floor Map & Replay Scrubber */}
-        <div className="c2-column" aria-label="Tactical Map and Replay Viewport">
-          <FloorMap />
-          <MissionReplayScrubber />
-        </div>
+      {/* 4. Right Rail: Vehicle Inspector & Direct Optical Feed */}
+      <aside className="right-rail" aria-label="Vehicle Inspector and Optical Feeds">
+        <VehicleStatusCard vehicle={scout} />
+        <CameraFeed />
+      </aside>
 
-        {/* Right Rail: Direct MJPEG Camera Feed, Reasoning Trace & Event Log */}
-        <div
-          className="c2-column"
-          aria-label="Optical Feeds and Operational Logs Rail"
-        >
-          <CameraFeed />
-          <ReasoningTracePanel />
-          <EventLog />
-        </div>
-      </div>
+      {/* 5. Bottom Dock: Mission Replay, Event Log & Reasoning Trace */}
+      <footer className="ops-dock" aria-label="Operational Logs and Replay Dock">
+        <MissionReplayScrubber />
+        <EventLog />
+        <ReasoningTracePanel />
+      </footer>
     </main>
   );
 }

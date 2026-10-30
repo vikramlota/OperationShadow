@@ -1,5 +1,10 @@
 import React, { useState } from "react";
-import { completeMission, createMission, fetchMission } from "../api/client";
+import {
+  completeMission,
+  createMission,
+  executeUltronSimulation,
+  fetchMission,
+} from "../api/client";
 import { useDashboardStore } from "../state/store";
 
 export function MissionPanel(): React.JSX.Element {
@@ -7,6 +12,7 @@ export function MissionPanel(): React.JSX.Element {
   const [objectiveInput, setObjectiveInput] = useState<string>("");
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [isCompleting, setIsCompleting] = useState<boolean>(false);
+  const [isRunningUltron, setIsRunningUltron] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
@@ -61,41 +67,64 @@ export function MissionPanel(): React.JSX.Element {
     }
   };
 
+  const handleRunUltronPipeline = async (): Promise<void> => {
+    if (!state.activeMissionId) {
+      return;
+    }
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setIsRunningUltron(true);
+    try {
+      const completed = await executeUltronSimulation(state.activeMissionId);
+      dispatch({ type: "SET_MISSION_DETAIL", payload: completed });
+      setSuccessMsg(
+        `ULTRON pipeline executed for ${completed.id}: hazard replanned, target located, mission COMPLETED.`,
+      );
+    } catch (err) {
+      setErrorMsg(
+        err instanceof Error ? err.message : "ULTRON simulation run failed.",
+      );
+    } finally {
+      setIsRunningUltron(false);
+    }
+  };
+
   return (
-    <section className="c2-panel" aria-label="Mission Panel">
-      <div className="c2-panel-header">
-        <h2 className="c2-panel-title">MISSION COMMAND &amp; TASKING</h2>
-        <span className="c2-panel-meta">
+    <section className="panel" aria-label="Mission Panel">
+      <div className="panel-header">
+        <h2 className="panel-title">MISSION COMMAND &amp; TASKING</h2>
+        <span className="panel-meta">
           {state.activeMissionId
             ? `${state.activeMissionId} // ${state.missionStatus}`
             : "NO ACTIVE MISSION"}
         </span>
       </div>
 
-      <div className="c2-panel-body">
+      <div className="panel-body">
         <form onSubmit={(e) => void handleSubmit(e)} noValidate>
           <label
             htmlFor="mission-objective-input"
-            className="c2-kv-label"
+            className="data-label"
             style={{ display: "block", marginBottom: "4px" }}
           >
             MISSION OBJECTIVE
           </label>
-          <div style={{ display: "flex", gap: "6px" }}>
+          <div style={{ display: "flex", gap: "4px" }}>
             <input
               id="mission-objective-input"
               type="text"
-              className="c2-input"
-              placeholder="e.g. Recon Sector Alpha and locate thermal anomaly"
+              className="input"
+              placeholder="e.g. Inspect building, find red_package, and report hazards"
               value={objectiveInput}
               onChange={(e) => setObjectiveInput(e.target.value)}
               disabled={isSubmitting}
             />
             <button
               type="submit"
-              className="c2-btn"
+              className="btn btn-primary"
               disabled={isSubmitting}
               aria-label="Submit Mission"
+              style={{ whiteSpace: "nowrap", padding: "5px 12px" }}
             >
               {isSubmitting ? "DISPATCHING..." : "DISPATCH"}
             </button>
@@ -114,25 +143,45 @@ export function MissionPanel(): React.JSX.Element {
           </div>
         )}
 
-        <div className="c2-kv-grid">
-          <div className="c2-kv-item">
-            <span className="c2-kv-label">MISSION ID</span>
-            <span className="c2-kv-value">
+        <div className="data-grid">
+          <div className="data-cell">
+            <div className="data-label">MISSION ID</div>
+            <div className="data-value">
               {state.activeMissionId ?? "NONE"}
-            </span>
+            </div>
           </div>
-          <div className="c2-kv-item">
-            <span className="c2-kv-label">STATUS</span>
-            <span className="c2-kv-value">{state.missionStatus}</span>
+          <div className="data-cell">
+            <div className="data-label">STATUS</div>
+            <div className="data-value" style={{ color: state.missionStatus === "ACTIVE" ? "var(--marker-scout)" : undefined }}>
+              {state.missionStatus}
+            </div>
           </div>
         </div>
 
         {state.activeMissionId && state.missionStatus === "ACTIVE" && (
-          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "flex-end",
+              gap: "4px",
+              flexWrap: "wrap",
+            }}
+          >
             <button
               type="button"
-              className="c2-btn"
-              disabled={isCompleting}
+              className="btn btn-secondary"
+              style={{ fontSize: "10px", padding: "4px 8px" }}
+              disabled={isRunningUltron || isCompleting}
+              onClick={() => void handleRunUltronPipeline()}
+              aria-label="Run ULTRON Simulation Pipeline"
+            >
+              {isRunningUltron ? "RUNNING..." : "RUN ULTRON"}
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              style={{ fontSize: "10px", padding: "4px 8px" }}
+              disabled={isCompleting || isRunningUltron}
               onClick={() => void handleCompleteMission()}
               aria-label="Complete Simulated Mission"
             >
@@ -141,12 +190,51 @@ export function MissionPanel(): React.JSX.Element {
           </div>
         )}
 
-        {state.missionObjective && (
-          <div className="c2-kv-item" style={{ flexDirection: "column", gap: "2px" }}>
-            <span className="c2-kv-label">ACTIVE OBJECTIVE</span>
-            <span style={{ color: "var(--text-primary)", fontSize: "12px" }}>
-              {state.missionObjective}
+        {state.activeMissionId && state.missionStatus === "COMPLETED" && (
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              padding: "6px 10px",
+              background: "var(--sf-base)",
+              borderRadius: "3px",
+              border: "1px solid var(--border-subtle)",
+              borderLeft: "3px solid var(--status-nominal)",
+            }}
+          >
+            <span
+              style={{
+                color: "var(--status-nominal)",
+                fontFamily: "var(--font-data)",
+                fontSize: "11px",
+                fontWeight: 600,
+              }}
+            >
+              MISSION COMPLETED // READY FOR NEXT OBJECTIVE
             </span>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              style={{ fontSize: "10px", padding: "3px 8px" }}
+              onClick={() => {
+                const el = document.getElementById("mission-objective-input");
+                if (el) {
+                  el.focus();
+                }
+              }}
+            >
+              + NEW OBJECTIVE
+            </button>
+          </div>
+        )}
+
+        {state.missionObjective && (
+          <div className="data-cell" style={{ background: "var(--sf-base)" }}>
+            <div className="data-label">ACTIVE OBJECTIVE</div>
+            <div style={{ color: "var(--text-primary)", fontSize: "11px", marginTop: "2px" }}>
+              {state.missionObjective}
+            </div>
           </div>
         )}
 
@@ -155,50 +243,40 @@ export function MissionPanel(): React.JSX.Element {
             style={{
               display: "flex",
               justifyContent: "space-between",
+              alignItems: "center",
               marginBottom: "4px",
             }}
           >
-            <span className="c2-kv-label">
+            <span className="data-label">
               ASSIGNED TASKS ({state.missionTasks.length})
             </span>
             {state.ultronIsStub && (
-              <span className="c2-badge c2-badge-warning">
-                PLANNER: ULTRON STUB (SIMULATED)
+              <span className="badge badge-warning" style={{ fontSize: "9px", padding: "1px 5px" }}>
+                ULTRON STUB
               </span>
             )}
           </div>
 
           {state.missionTasks.length === 0 ? (
-            <div className="c2-log-viewport" style={{ color: "var(--text-muted)" }}>
+            <div style={{ color: "var(--text-muted)", fontSize: "11px", padding: "8px 0" }}>
               No tasks assigned. Submit a mission objective to generate tasks.
             </div>
           ) : (
-            <div className="c2-log-viewport" aria-label="Mission Tasks List">
+            <div style={{ display: "flex", flexDirection: "column", gap: "3px" }} aria-label="Mission Tasks List">
               {state.missionTasks.map((task) => (
-                <div key={task.id} className="c2-log-entry">
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      fontFamily: "var(--font-mono)",
-                      fontSize: "11px",
-                    }}
-                  >
-                    <strong>
+                <div key={task.id} className="task-entry task-active">
+                  <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                    <span style={{ fontWeight: 600 }}>
                       {task.id} [P{task.priority}] → {task.vehicle_id ?? "UNASSIGNED"}
-                    </strong>
-                    <span>{task.status}</span>
+                    </span>
+                    <span style={{ color: "var(--text-secondary)", fontSize: "10px" }}>
+                      TYPE: {task.type}
+                      {task.area ? ` // AREA: ${task.area}` : ""}
+                    </span>
                   </div>
-                  <div
-                    style={{
-                      color: "var(--text-secondary)",
-                      fontSize: "11px",
-                      fontFamily: "var(--font-mono)",
-                    }}
-                  >
-                    TYPE: {task.type}
-                    {task.area ? ` // AREA: ${task.area}` : ""}
-                  </div>
+                  <span className="task-status" style={{ background: "var(--status-nominal-muted)", color: "#7AAA8A" }}>
+                    {task.status}
+                  </span>
                 </div>
               ))}
             </div>
