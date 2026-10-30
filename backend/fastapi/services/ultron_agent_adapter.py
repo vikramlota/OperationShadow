@@ -104,6 +104,7 @@ class UltronLangGraphAgent(UltronAgentPort):
         self,
         mission_id: str,
         objective: str,
+        language: str = "English",
     ) -> SimulatedMissionPlanStub:
         """Generates structured task plan via ULTRON LangGraph workflow."""
         self._active_mission_id = mission_id
@@ -120,6 +121,7 @@ class UltronLangGraphAgent(UltronAgentPort):
             "repair_prompt": None,
             "retry_count": 0,
             "trigger_rationale": None,
+            "language": language,
         }
 
         # Execute LangGraph: START -> plan -> validate -> assign -> END
@@ -131,11 +133,12 @@ class UltronLangGraphAgent(UltronAgentPort):
             raise RuntimeError(msg)
 
         specs: list[SimulatedTaskSpecStub] = []
-        for task in plan.tasks:
+        for idx, task in enumerate(plan.tasks, start=1):
             veh_str = task.vehicle.value if hasattr(task.vehicle, "value") else str(task.vehicle)
+            scoped_id = f"{mission_id}-T{idx:02d}"
             specs.append(
                 SimulatedTaskSpecStub(
-                    task_id=task.id,
+                    task_id=scoped_id,
                     vehicle_id=veh_str,  # type: ignore[arg-type]
                     task_type=task.type.upper(),
                     area=task.area,

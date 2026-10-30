@@ -200,6 +200,7 @@ class UltronAgentPort(Protocol):
         self,
         mission_id: str,
         objective: str,
+        language: str = "English",
     ) -> SimulatedMissionPlanStub:
         """Generate a deterministic stub mission decomposition for development/testing."""
         ...

@@ -17,13 +17,17 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
+from datetime import datetime, timezone
+import json
 import time
-from typing import Literal
+from typing import Any, Literal, cast
 import uuid
 
 from core.config import settings
 from core.logging import get_logger
+from core.security import is_valid_vehicle_token
 from db.models import Event, Mission, Vehicle
+from fastapi import WebSocket, WebSocketDisconnect, status
 from schemas.entities import (
     EmergencyStopResponse,
     EventRead,
@@ -38,10 +42,11 @@ from schemas.enums import (
     VehicleModeEnum,
     VehicleStatusEnum,
 )
+from schemas.websocket import VehicleOutboundCommandStub
 from services.vehicle_service import VehicleService
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from ultron_stub import VehicleId
+from ultron_stub import ObservationPayloadStub, TelemetryPayloadStub, VehicleId
 from websocket.dashboard_gateway import DashboardGateway
 
 logger = get_logger("websocket.vehicle_gateway")
@@ -100,6 +105,16 @@ class VehicleGatewayFastPath:
             pre_state = adapter.get_state()
             try:
                 stub_res = await adapter.trigger_emergency_stop()
+                if vehicle_gateway.is_connected(vid):
+                    with suppress(Exception):
+                        await vehicle_gateway.send_command(
+                            vid,
+                            {
+                                "command_type": "STOP",
+                                "command_id": f"ESTOP-{uuid.uuid4().hex[:8].upper()}",
+                                "parameters": {"reason": "EMERGENCY_STOP_FAST_PATH"},
+                            },
+                        )
                 await self._emit_trace(f"dispatch:{vid}")
                 outcomes[vid_enum] = VehicleEmergencyStopOutcome(
                     vehicle_id=vid_enum,
@@ -288,4 +303,181 @@ class VehicleGatewayFastPath:
         self._background_tasks.clear()
 
 
+class VehicleGateway:
+    """Manages persistent authenticated WebSocket connections from vehicles (§5.1)."""
+
+    def __init__(self) -> None:
+        self._active_connections: dict[VehicleId, WebSocket] = {}
+        self._lock = asyncio.Lock()
+
+    def is_connected(self, vehicle_id: str) -> bool:
+        """Check if vehicle currently holds an open WebSocket."""
+        return vehicle_id in self._active_connections
+
+    async def send_command(
+        self,
+        vehicle_id: str,
+        command: dict[str, Any] | VehicleOutboundCommandStub,
+    ) -> bool:
+        """Send a structured command envelope directly to the connected vehicle (§5.1)."""
+        async with self._lock:
+            ws = self._active_connections.get(cast(VehicleId, vehicle_id))
+            if ws is None:
+                return False
+
+        if isinstance(command, VehicleOutboundCommandStub):
+            payload_str = command.model_dump_json()
+        elif isinstance(command, dict):
+            payload_str = json.dumps(command)
+        else:
+            return False
+
+        try:
+            await ws.send_text(payload_str)
+            return True
+        except Exception as exc:
+            logger.warning(f"Failed to send command to {vehicle_id} over WebSocket: {exc}")
+            async with self._lock:
+                if self._active_connections.get(cast(VehicleId, vehicle_id)) == ws:
+                    self._active_connections.pop(cast(VehicleId, vehicle_id), None)
+            return False
+
+    async def handle_vehicle_session(
+        self,
+        websocket: WebSocket,
+        session_factory: async_sessionmaker[AsyncSession],
+        vehicle_service: VehicleService,
+        raw_vehicle_id: str | None = None,
+        token: str | None = None,
+    ) -> None:
+        """Handle persistent bidirectional WebSocket session for a vehicle (§5.1)."""
+        # 1. Authenticate token
+        candidate_token = (
+            token
+            or websocket.query_params.get("token")
+            or websocket.headers.get("x-vehicle-token")
+        )
+        if candidate_token is None:
+            auth_header = websocket.headers.get("authorization")
+            if auth_header:
+                scheme, _, param = auth_header.partition(" ")
+                if scheme.lower() == "bearer" and param:
+                    candidate_token = param.strip()
+
+        if not is_valid_vehicle_token(candidate_token):
+            logger.warning("Rejecting vehicle WebSocket connection: invalid or missing token.")
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid vehicle token")
+            return
+
+        # 2. Resolve vehicle ID
+        candidate_id = (
+            raw_vehicle_id
+            or websocket.query_params.get("vehicle_id")
+            or websocket.headers.get("x-vehicle-id")
+        )
+        if candidate_id not in ("SCOUT01", "HAWK01"):
+            logger.warning(f"Rejecting vehicle WebSocket connection: unrecognized vehicle ID '{candidate_id}'.")
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid vehicle ID")
+            return
+
+        vid: VehicleId = cast(VehicleId, candidate_id)
+        await websocket.accept()
+        logger.info(f"Vehicle {vid} connected over WebSocket.")
+
+        async with self._lock:
+            old_ws = self._active_connections.get(vid)
+            if old_ws is not None and old_ws != websocket:
+                with suppress(Exception):
+                    await old_ws.close(code=status.WS_1000_NORMAL_CLOSURE, reason="Superseded by new session")
+            self._active_connections[vid] = websocket
+
+        # Mark vehicle connected in DB & adapter
+        async with session_factory() as session:
+            try:
+                await vehicle_service.connect_vehicle(session, vid)
+            except Exception as exc:
+                logger.error(f"Failed to update connect state for {vid}: {exc}")
+
+        try:
+            while True:
+                msg_text = await websocket.receive_text()
+                try:
+                    data = json.loads(msg_text)
+                except Exception:
+                    continue
+
+                if not isinstance(data, dict):
+                    continue
+
+                if "token" in data and not is_valid_vehicle_token(data["token"]):
+                    logger.warning(f"Discarding frame from {vid} with invalid payload token.")
+                    continue
+
+                msg_type = data.get("message_type") or data.get("type")
+                if msg_type == "telemetry" or "telemetry" in data:
+                    tel_data = data.get("telemetry") if isinstance(data.get("telemetry"), dict) else data
+                    ts = tel_data.get("timestamp")
+                    if isinstance(ts, str):
+                        try:
+                            ts_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                        except Exception:
+                            ts_dt = datetime.now(timezone.utc)
+                    elif isinstance(ts, datetime):
+                        ts_dt = ts
+                    else:
+                        ts_dt = datetime.now(timezone.utc)
+
+                    stub = TelemetryPayloadStub(
+                        vehicle_id=vid,
+                        timestamp=ts_dt,
+                        status=str(tel_data.get("status", "IDLE")),
+                        battery=float(tel_data.get("battery", 100.0)),
+                        position_x=float(tel_data.get("position_x", 0.0)),
+                        position_y=float(tel_data.get("position_y", 0.0)),
+                        position_alt=float(tel_data.get("position_alt", 0.0)),
+                        raw_sensors=tel_data.get("raw_sensors"),
+                    )
+                    async with session_factory() as session:
+                        await vehicle_service.ingest_telemetry(session, stub)
+
+                elif msg_type == "observation" or "observation" in data:
+                    obs_data = data.get("observation") if isinstance(data.get("observation"), dict) else data
+                    ts = obs_data.get("timestamp")
+                    ts_dt = datetime.fromisoformat(ts.replace("Z", "+00:00")) if isinstance(ts, str) else datetime.now(timezone.utc)
+                    obs_stub = ObservationPayloadStub(
+                        observation_id=str(obs_data.get("observation_id", f"OBS-{uuid.uuid4().hex[:6].upper()}")),
+                        mission_id=str(obs_data.get("mission_id", "")),
+                        vehicle_id=vid,
+                        obs_type=str(obs_data.get("obs_type", "HAZARD_DETECTED")),
+                        confidence=float(obs_data.get("confidence", 1.0)),
+                        location_x=float(obs_data.get("location_x", 0.0)),
+                        location_y=float(obs_data.get("location_y", 0.0)),
+                        timestamp=ts_dt,
+                        raw=obs_data.get("raw"),
+                    )
+                    async with session_factory() as session:
+                        await vehicle_service.record_observation(session, obs_stub)
+
+        except WebSocketDisconnect:
+            logger.info(f"Vehicle {vid} disconnected.")
+        except Exception as exc:
+            logger.warning(f"Error handling vehicle {vid} WebSocket session: {exc}")
+        finally:
+            async with self._lock:
+                if self._active_connections.get(vid) == websocket:
+                    self._active_connections.pop(vid, None)
+            async with session_factory() as session:
+                with suppress(Exception):
+                    await vehicle_service.disconnect_vehicle(session, vid)
+
+    async def close_all(self) -> None:
+        """Close all vehicle WebSockets cleanly on server shutdown."""
+        async with self._lock:
+            for vid, ws in list(self._active_connections.items()):
+                with suppress(Exception):
+                    await ws.close(code=status.WS_1001_GOING_AWAY, reason="Server shutdown")
+            self._active_connections.clear()
+
+
+vehicle_gateway = VehicleGateway()
 vehicle_gateway_fast_path = VehicleGatewayFastPath()

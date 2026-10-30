@@ -75,6 +75,7 @@ class StubUltronAgent(UltronAgentPort):
         self,
         mission_id: str,
         objective: str,
+        language: str = "English",
     ) -> SimulatedMissionPlanStub:
         """Return a deterministic stub task assignment for SCOUT01 and HAWK01."""
         self._active_mission_id = mission_id

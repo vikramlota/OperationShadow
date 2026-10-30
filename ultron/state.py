@@ -10,3 +10,4 @@ class UltronState(TypedDict):
     repair_prompt: Optional[str]
     retry_count: int
     trigger_rationale: Optional[str]
+    language: str

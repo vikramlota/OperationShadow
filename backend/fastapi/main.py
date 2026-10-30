@@ -30,7 +30,12 @@ from services.mission_service import MissionService, mission_service
 from services.vehicle_service import VehicleService, vehicle_service
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from websocket.dashboard_gateway import DashboardGateway, dashboard_gateway
-from websocket.vehicle_gateway import VehicleGatewayFastPath, vehicle_gateway_fast_path
+from websocket.vehicle_gateway import (
+    VehicleGateway,
+    VehicleGatewayFastPath,
+    vehicle_gateway,
+    vehicle_gateway_fast_path,
+)
 
 logger = get_logger("main")
 
@@ -54,6 +59,7 @@ def create_app(
     vehicle_svc: VehicleService | None = None,
     event_svc: EventService | None = None,
     dash_gateway: DashboardGateway | None = None,
+    veh_gateway: VehicleGateway | None = None,
     estop_fast_path: VehicleGatewayFastPath | None = None,
     floor_plan_config: FloorPlanConfigResponse | None = None,
 ) -> FastAPI:
@@ -62,6 +68,7 @@ def create_app(
 
     active_session_factory = session_factory or AsyncSessionLocal
     active_gateway = dash_gateway or dashboard_gateway
+    active_veh_gateway = veh_gateway or vehicle_gateway
     active_estop_fast_path = estop_fast_path or vehicle_gateway_fast_path
     active_event_svc = event_svc or event_service
     active_mission_svc = mission_svc or mission_service
@@ -81,6 +88,7 @@ def create_app(
             yield
         finally:
             await active_estop_fast_path.shutdown()
+            await active_veh_gateway.close_all()
             await active_gateway.close_all()
             await active_vehicle_svc.stop()
             logger.info("Operation Shadow backend shut down cleanly.")
@@ -93,6 +101,7 @@ def create_app(
 
     application.state.session_factory = active_session_factory
     application.state.dashboard_gateway = active_gateway
+    application.state.vehicle_gateway = active_veh_gateway
     application.state.vehicle_gateway_fast_path = active_estop_fast_path
     application.state.event_service = active_event_svc
     application.state.mission_service = active_mission_svc
@@ -125,6 +134,7 @@ def create_app(
     application.include_router(vehicle.router)
     application.include_router(events.router)
     application.include_router(map_router.router)
+    application.include_router(map_router.upload_map_router)
     application.include_router(emergency.router)
 
     @application.get("/health", response_model=HealthResponse, tags=["system"])
@@ -144,6 +154,15 @@ def create_app(
     async def dashboard_websocket_endpoint(websocket: WebSocket) -> None:
         """Dashboard push WebSocket endpoint (§5.2)."""
         await active_gateway.handle_client_session(websocket, active_session_factory)
+
+    @application.websocket("/ws/vehicle")
+    async def vehicle_websocket_endpoint(websocket: WebSocket) -> None:
+        """Vehicle telemetry & command WebSocket endpoint (§5.1)."""
+        await active_veh_gateway.handle_vehicle_session(
+            websocket,
+            active_session_factory,
+            active_vehicle_svc,
+        )
 
     return application
 

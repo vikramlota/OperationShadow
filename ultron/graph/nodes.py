@@ -11,7 +11,8 @@ def node_plan(state: UltronState) -> Dict[str, Any]:
     plan = invoke_gemini_planner(
         world=state["world"],
         repair_prompt=state.get("repair_prompt"),
-        trigger_rationale=state.get("trigger_rationale")
+        trigger_rationale=state.get("trigger_rationale"),
+        language=state.get("language", "English"),
     )
     return {"proposed_plan": plan}
 

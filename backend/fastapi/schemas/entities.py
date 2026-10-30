@@ -92,9 +92,10 @@ class OrmReadBase(SchemaBase):
 
 
 class MissionCreateRequest(SchemaBase):
-    """POST /mission request payload (§7: `{ "objective": "string" }`)."""
+    """POST /mission request payload (§7: `{ "objective": "string", "language": "English" }`)."""
 
     objective: Annotated[str, Field(min_length=1, max_length=2000)]
+    language: Annotated[str, Field(min_length=1, max_length=64)] = "English"
 
 
 class MissionCreateResponse(SchemaBase):
@@ -580,3 +581,12 @@ class FloorPlanConfigResponse(SchemaBase):
     rooms: list[FloorPlanRoomSchema] = Field(default_factory=list)
     waypoints: list[FloorPlanWaypointSchema] = Field(default_factory=list)
     hawk_geofence: FloorPlanGeofenceSchema
+
+
+class MapUploadResponse(SchemaBase):
+    """POST /upload-map/{vehicle_id} response schema."""
+
+    status: str = "success"
+    vehicle_id: str
+    saved_files: list[str] = Field(default_factory=list)
+    filenames: list[str] = Field(default_factory=list)

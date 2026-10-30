@@ -82,13 +82,23 @@ class MissionService:
         session: AsyncSession,
         request: MissionCreateRequest,
     ) -> MissionCreateResponse:
-        """Create a mission via ULTRON stub, persist records, and broadcast updates (§4, §7)."""
+        """Create a mission via ULTRON LangGraph workflow, persist records, and broadcast updates (§4, §7)."""
+        response, _ = await self.create_mission_with_rationale(session, request)
+        return response
+
+    async def create_mission_with_rationale(
+        self,
+        session: AsyncSession,
+        request: MissionCreateRequest,
+    ) -> tuple[MissionCreateResponse, str | None]:
+        """Create a mission, persist records, and return (response, rationale) for downstream tasks (e.g. TTS)."""
         mission_id = await self._next_mission_id(session)
         now = datetime.now(timezone.utc)
 
         plan = await self._agent.create_simulated_mission(
             mission_id=mission_id,
             objective=request.objective,
+            language=request.language,
         )
 
         mission_row = Mission(
@@ -117,7 +127,7 @@ class MissionService:
 
         await session.commit()
 
-        # Persist and broadcast initial mission event and stub reasoning trace
+        # Persist and broadcast initial mission event and reasoning trace
         await self._events.record_event(
             session,
             mission_id=mission_id,
@@ -139,7 +149,7 @@ class MissionService:
         detail = await self.get_mission(session, mission_id)
         await self._gateway.broadcast_mission_status(detail)
 
-        return MissionCreateResponse(mission_id=mission_id)
+        return MissionCreateResponse(mission_id=mission_id), plan.rationale
 
     async def get_mission(
         self,

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from db.session import get_db_session
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from schemas.entities import (
     MissionCreateRequest,
     MissionCreateResponse,
@@ -13,6 +13,7 @@ from schemas.entities import (
     MissionReplayResponse,
 )
 from services.mission_service import MissionService, mission_service
+from services.tts import speak_rationale
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/mission", tags=["mission"])
@@ -27,11 +28,15 @@ def get_mission_service(request: Request) -> MissionService:
 @router.post("", response_model=MissionCreateResponse)
 async def create_mission_endpoint(
     payload: MissionCreateRequest,
+    background_tasks: BackgroundTasks,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     service: Annotated[MissionService, Depends(get_mission_service)],
 ) -> MissionCreateResponse:
-    """Create a new mission via the in-process ULTRON stub and persist tasks (§7)."""
-    return await service.create_mission(session, payload)
+    """Create a new mission via the in-process ULTRON LangGraph workflow and persist tasks (§7)."""
+    response, rationale = await service.create_mission_with_rationale(session, payload)
+    if rationale:
+        background_tasks.add_task(speak_rationale, rationale)
+    return response
 
 
 @router.get("/{mission_id}", response_model=MissionDetailRead)

@@ -96,6 +96,7 @@ class VehicleService:
         clock: ClockPort | None = None,
         simulator: MockFleetSimulator | None = None,
         gateway: DashboardGateway | None = None,
+        veh_gateway: Any | None = None,
         app_settings: Settings | None = None,
         heartbeat_interval_ms: int | None = None,
         heartbeat_timeout_ms: int | None = None,
@@ -109,6 +110,7 @@ class VehicleService:
         self._clock: ClockPort = clock or SystemClock()
         self._agent: UltronAgentPort = agent if agent is not None else StubUltronAgent()
         self._gateway: DashboardGateway = gateway or dashboard_gateway
+        self._vehicle_gateway: Any | None = veh_gateway
         self._heartbeat_interval_ms = (
             heartbeat_interval_ms
             if heartbeat_interval_ms is not None
@@ -159,6 +161,9 @@ class VehicleService:
 
     def set_gateway(self, gateway: DashboardGateway) -> None:
         self._gateway = gateway
+
+    def set_vehicle_gateway(self, veh_gateway: Any) -> None:
+        self._vehicle_gateway = veh_gateway
 
     @property
     def heartbeat_interval_ms(self) -> int:

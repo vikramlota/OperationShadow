@@ -1,6 +1,7 @@
 import asyncio
 import sys
 from pathlib import Path
+import pytest
 
 # Add project root to sys.path
 project_root = Path(__file__).resolve().parent.parent
@@ -18,6 +19,7 @@ from ultron.evaluator.updater import update_world_model
 from ultron.state import UltronState
 
 
+@pytest.mark.asyncio
 async def test_ultron_pipeline():
     print("====================================================")
     print("     TESTING ULTRON MISSION & REPLANNING PIPELINE    ")

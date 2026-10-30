@@ -21,7 +21,8 @@ except ImportError:
 def invoke_gemini_planner(
     world: WorldModel,
     repair_prompt: Optional[str] = None,
-    trigger_rationale: Optional[str] = None
+    trigger_rationale: Optional[str] = None,
+    language: str = "English",
 ) -> MissionPlan:
     """
     Invokes the Gemini LLM to generate or repair a MissionPlan.
@@ -29,6 +30,7 @@ def invoke_gemini_planner(
     Falls back to cached plan if API is unreachable or times out.
     """
     user_prompt = f"CURRENT WORLD STATE:\n{world.model_dump_json(indent=2)}\n\n"
+    user_prompt += f"RATIONALE_LANGUAGE: {language}\n\n"
 
     if trigger_rationale:
         user_prompt += f"REPLAN TRIGGER DETECTED: {trigger_rationale}\nAdjust the mission plan accordingly.\n"
