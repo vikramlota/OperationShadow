@@ -1,4 +1,4 @@
-from ultron.schemas.commands import Position2D, Position3D, HawkAction
+from ultron.schemas.commands import Position2D, Position3D, ScoutAction, HawkAction
 from ultron.schemas.mission import VehicleID
 
 GEOFENCE_LIMITS = {
@@ -7,6 +7,21 @@ GEOFENCE_LIMITS = {
     "y_min": 0.0,
     "y_max": 15.0,
     "alt_max": 5.0,
+}
+
+SCOUT_ALLOWED_ACTIONS = {
+    ScoutAction.EXPLORE.value,
+    ScoutAction.NAVIGATE.value,
+    ScoutAction.SCAN.value,
+    ScoutAction.INSPECT.value,
+    ScoutAction.FOLLOW.value,
+    ScoutAction.RETURN_HOME.value,
+    ScoutAction.PICK.value,
+    ScoutAction.DROP.value,
+    ScoutAction.STOP.value,
+    ScoutAction.REPORT.value,
+    "FIND_TARGET",
+    "HOLD_POSITION",
 }
 
 HAWK_ALLOWED_ACTIONS = {

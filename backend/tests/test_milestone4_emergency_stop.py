@@ -114,12 +114,9 @@ async def test_individual_and_all_simulated_emergency_stop_and_idempotency(
             MissionCreateRequest(objective="Active mission during E-Stop test"),
         )
         await vehicle_svc.connect_vehicle(session, "SCOUT01")
-        await vehicle_svc.connect_vehicle(session, "HAWK01")
 
     simulator.scout.set_target_position(8.0, 4.0)
     simulator.scout.transition_task_state("M001-T01", "IN_PROGRESS")
-    simulator.hawk.set_target_position(5.0, 5.0, alt=2.0)
-    simulator.hawk.transition_task_state("M001-T02", "IN_PROGRESS")
 
     transport = ASGITransport(app=test_app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -130,7 +127,7 @@ async def test_individual_and_all_simulated_emergency_stop_and_idempotency(
         missing_body = await client.post("/emergency-stop", json={})
         assert missing_body.status_code == 422
 
-        # 1. Stop SCOUT01 individually; HAWK01 must continue unaffected
+        # 1. Stop SCOUT01 individually
         res_scout = await client.post("/emergency-stop", json={"vehicle_id": "SCOUT01"})
         assert res_scout.status_code == 200
         body_scout = res_scout.json()
@@ -151,9 +148,6 @@ async def test_individual_and_all_simulated_emergency_stop_and_idempotency(
         assert scout_outcome["resulting_status"] == "EMERGENCY_STOPPED"
         assert scout_outcome["was_already_stopped"] is False
 
-        # Confirm HAWK01 was not stopped by SCOUT01's individual stop
-        assert simulator.hawk.get_state().status == "EXECUTING"
-
         # 9. Repeated stop on SCOUT01 is handled safely and reports was_already_stopped=True
         res_repeat = await client.post("/emergency-stop", json={"vehicle_id": "SCOUT01"})
         assert res_repeat.status_code == 200
@@ -161,15 +155,14 @@ async def test_individual_and_all_simulated_emergency_stop_and_idempotency(
         assert repeat_outcome["was_already_stopped"] is True
         assert repeat_outcome["vehicle_confirmed_stopped"] is True
 
-        # 2. Trigger ALL stop -> stops both SCOUT01 and HAWK01
+        # 2. Trigger ALL stop -> stops SCOUT01
         res_all = await client.post("/emergency-stop", json={"vehicle_id": "ALL"})
         assert res_all.status_code == 200
         body_all = res_all.json()
         assert body_all["target"] == "ALL"
         assert body_all["overall_outcome"] == "ALL_CONFIRMED_STOPPED"
-        assert set(body_all["vehicle_outcomes"].keys()) == {"SCOUT01", "HAWK01"}
-        assert body_all["vehicle_outcomes"]["HAWK01"]["vehicle_confirmed_stopped"] is True
-        assert body_all["vehicle_outcomes"]["HAWK01"]["was_already_stopped"] is False
+        assert set(body_all["vehicle_outcomes"].keys()) == {"SCOUT01"}
+        assert body_all["vehicle_outcomes"]["SCOUT01"]["vehicle_confirmed_stopped"] is True
         assert body_all["vehicle_outcomes"]["SCOUT01"]["was_already_stopped"] is True
 
     await fast_path.wait_for_pending_logs()
@@ -222,7 +215,7 @@ async def test_partial_failure_disconnected_and_unknown_distinguish_acceptance_f
         assert body_disc["overall_outcome"] == "NONE_CONFIRMED_STOPPED"
         assert body_disc["all_confirmed_stopped"] is False
         assert body_disc["any_dispatch_failed"] is True
-        for vid in ("SCOUT01", "HAWK01"):
+        for vid in ("SCOUT01",):
             outcome = body_disc["vehicle_outcomes"][vid]
             assert outcome["connection_at_dispatch"] == "DISCONNECTED"
             assert outcome["dispatch_attempted"] is True
@@ -230,10 +223,9 @@ async def test_partial_failure_disconnected_and_unknown_distinguish_acceptance_f
             assert outcome["vehicle_acknowledged"] is False
             assert outcome["vehicle_confirmed_stopped"] is False
 
-        # Connect both vehicles, then mark SCOUT01 as UNKNOWN (missed heartbeat)
+        # Connect SCOUT01, then mark SCOUT01 as UNKNOWN (missed heartbeat)
         async with session_factory() as session:
             await vehicle_svc.connect_vehicle(session, "SCOUT01")
-            await vehicle_svc.connect_vehicle(session, "HAWK01")
         simulator.scout.mark_unknown_by_monitor()
 
         res_unknown = await client.post("/emergency-stop", json={"vehicle_id": "SCOUT01"})
@@ -246,8 +238,8 @@ async def test_partial_failure_disconnected_and_unknown_distinguish_acceptance_f
         assert u_out["vehicle_confirmed_stopped"] is False
         assert u_out["resulting_status"] == "UNKNOWN"
 
-        # 3. Reconnect SCOUT01, then inject transport failure on SCOUT01 only;
-        # ALL must still stop HAWK01 and report PARTIAL_STOPPED!
+        # 3. Reconnect SCOUT01, then inject transport failure on SCOUT01;
+        # ALL must report NONE_CONFIRMED_STOPPED!
         async with session_factory() as session:
             await vehicle_svc.reconnect_vehicle(session, "SCOUT01")
         simulator.scout.configure_faults(fail_emergency_stop_dispatch=True)
@@ -255,14 +247,11 @@ async def test_partial_failure_disconnected_and_unknown_distinguish_acceptance_f
         res_partial = await client.post("/emergency-stop", json={"vehicle_id": "ALL"})
         assert res_partial.status_code == 200
         body_partial = res_partial.json()
-        assert body_partial["overall_outcome"] == "PARTIAL_STOPPED"
+        assert body_partial["overall_outcome"] == "NONE_CONFIRMED_STOPPED"
         assert body_partial["all_confirmed_stopped"] is False
         assert body_partial["any_dispatch_failed"] is True
         assert body_partial["vehicle_outcomes"]["SCOUT01"]["dispatch_succeeded"] is False
         assert body_partial["vehicle_outcomes"]["SCOUT01"]["vehicle_confirmed_stopped"] is False
-        assert body_partial["vehicle_outcomes"]["HAWK01"]["dispatch_succeeded"] is True
-        assert body_partial["vehicle_outcomes"]["HAWK01"]["vehicle_confirmed_stopped"] is True
-        assert simulator.hawk.get_state().status == "EMERGENCY_STOPPED"
 
     await fast_path.shutdown()
     await gateway.close_all()
@@ -292,7 +281,6 @@ async def test_fast_path_bypasses_ultron_and_db_failures_and_preserves_order(
 
     async with session_factory() as session:
         await vehicle_svc.connect_vehicle(session, "SCOUT01")
-        await vehicle_svc.connect_vehicle(session, "HAWK01")
 
     # 5. Poison ULTRON planning, World Model update hooks, and ordinary send_command
     # so that if emergency stop touches any of them, the test would fail immediately.
@@ -305,7 +293,6 @@ async def test_fast_path_bypasses_ultron_and_db_failures_and_preserves_order(
     setattr(agent, "create_simulated_mission", _poison_ultron)
     setattr(agent, "update_vehicle_state", _poison_ultron)
     setattr(simulator.scout, "send_command", _poison_send_command)
-    setattr(simulator.hawk, "send_command", _poison_send_command)
 
     # 7. Record deterministic execution trace to prove dispatch completes before DB logging starts
     trace_order: list[str] = []
@@ -320,9 +307,9 @@ async def test_fast_path_bypasses_ultron_and_db_failures_and_preserves_order(
     await fast_path.wait_for_pending_logs()
     fast_path.set_order_trace_hook(None)
 
-    assert trace_order[:2] == ["dispatch:SCOUT01", "dispatch:HAWK01"]
+    assert trace_order[0] == "dispatch:SCOUT01"
     assert "db_log_start" in trace_order
-    assert trace_order.index("dispatch:HAWK01") < trace_order.index("db_log_start")
+    assert trace_order.index("dispatch:SCOUT01") < trace_order.index("db_log_start")
 
     # 6. Inject a broken session_factory that always raises RuntimeError on DB access;
     # dispatch must still succeed without error!

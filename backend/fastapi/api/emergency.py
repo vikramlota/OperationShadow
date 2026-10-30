@@ -23,7 +23,7 @@ async def post_emergency_stop_endpoint(
     payload: EmergencyStopRequest,
     request: Request,
 ) -> EmergencyStopResponse:
-    """Trigger the Emergency Stop Fast Path for ALL, SCOUT01, or HAWK01 (§7, §10)."""
+    """Trigger the Emergency Stop Fast Path for ALL or SCOUT01 (§7, §10)."""
     fast_path: VehicleGatewayFastPath = (
         getattr(request.app.state, "vehicle_gateway_fast_path", None)
         or vehicle_gateway_fast_path

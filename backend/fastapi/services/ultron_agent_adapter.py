@@ -62,12 +62,6 @@ class UltronLangGraphAgent(UltronAgentPort):
                     battery=100.0,
                     connection=UltronConnectionStatus.ONLINE,
                 ),
-                "HAWK01": HawkState(
-                    mode=UltronVehicleMode.SIMULATED,
-                    position=Position3D(x=0.0, y=0.0, alt=0.0),
-                    battery=100.0,
-                    connection=UltronConnectionStatus.ONLINE,
-                ),
             },
         )
         self._observations: list[dict[str, Any]] = []
@@ -222,7 +216,7 @@ class UltronLangGraphAgent(UltronAgentPort):
         # Inject into World Model
         structured_obs = StructuredObservation(
             event=observation.obs_type,
-            source_vehicle=VehicleID.HAWK if observation.vehicle_id == "HAWK01" else VehicleID.SCOUT,
+            source_vehicle=VehicleID.SCOUT,
             confidence=observation.confidence,
             location=Position2D(x=observation.location_x, y=observation.location_y),
             timestamp=observation.timestamp.timestamp(),

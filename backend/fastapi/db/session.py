@@ -67,25 +67,18 @@ DEFAULT_VEHICLES: tuple[dict[str, Any], ...] = (
         "mode": "simulated",
         "last_heartbeat": None,
     },
-    {
-        "id": "HAWK01",
-        "vehicle_type": "aerial",
-        "status": "IDLE",
-        "battery": 100.0,
-        "position_x": 0.0,
-        "position_y": 0.0,
-        "position_alt": 0.0,
-        "connection": "DISCONNECTED",
-        "mode": "simulated",
-        "last_heartbeat": None,
-    },
 )
 
 
 async def seed_default_vehicles(session: AsyncSession) -> None:
-    """Idempotently seed SCOUT01 and HAWK01 and reset stale CONNECTED states on cold boot."""
+    """Idempotently seed SCOUT01 and reset stale CONNECTED states on cold boot."""
+    # Clean up any legacy HAWK01 record
+    hawk_row = (await session.execute(select(Vehicle).where(Vehicle.id == "HAWK01"))).scalar_one_or_none()
+    if hawk_row is not None:
+        await session.delete(hawk_row)
+
     result = await session.execute(
-        select(Vehicle).where(Vehicle.id.in_(["SCOUT01", "HAWK01"]))
+        select(Vehicle).where(Vehicle.id.in_(["SCOUT01"]))
     )
     existing_by_id = {v.id: v for v in result.scalars().all()}
 

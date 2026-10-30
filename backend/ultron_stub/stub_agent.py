@@ -39,18 +39,6 @@ class StubUltronAgent(UltronAgentPort):
                 "position_alt": 0.0,
                 "last_heartbeat": None,
             },
-            "HAWK01": {
-                "id": "HAWK01",
-                "vehicle_type": "aerial",
-                "status": "IDLE",
-                "connection": "DISCONNECTED",
-                "mode": "simulated",
-                "battery": 100.0,
-                "position_x": 0.0,
-                "position_y": 0.0,
-                "position_alt": 0.0,
-                "last_heartbeat": None,
-            },
         }
         self._observations: list[dict[str, Any]] = []
         self._unknown_transitions: list[tuple[VehicleId, datetime]] = []
@@ -88,24 +76,15 @@ class StubUltronAgent(UltronAgentPort):
             priority=1,
             status="ASSIGNED",
         )
-        hawk_task = SimulatedTaskSpecStub(
-            task_id=f"{mission_id}-T02",
-            vehicle_id="HAWK01",
-            task_type="SIMULATED_AERIAL_OVERWATCH",
-            area="SECTOR_B",
-            target=objective[:120],
-            priority=2,
-            status="ASSIGNED",
-        )
         return SimulatedMissionPlanStub(
             mission_id=mission_id,
             objective=objective,
             status="ACTIVE",
-            tasks=[scout_task, hawk_task],
+            tasks=[scout_task],
             trigger=f"Operator submitted mission {mission_id}",
             rationale=(
                 "[ULTRON_STUB] Deterministic simulated decomposition assigning "
-                "SCOUT01 ground recon and HAWK01 aerial overwatch."
+                "SCOUT01 ground recon."
             ),
             is_stub=True,
         )

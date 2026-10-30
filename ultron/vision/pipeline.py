@@ -8,7 +8,7 @@ from ultron.schemas.commands import Position2D
 class VisionPipeline:
     """
     Vision Pipeline running laptop-side (TRD §13).
-    Processes frames captured from SCOUT or HAWK camera streams,
+    Processes frames captured from SCOUT camera stream,
     detects objects and hazards, and converts them into StructuredObservation
     entities tagged with source_vehicle.
     """

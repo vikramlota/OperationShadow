@@ -34,12 +34,6 @@ async def main() -> None:
                 position=Position2D(x=0.0, y=0.0),
                 battery=100.0,
                 connection=ConnectionStatus.ONLINE
-            ),
-            "HAWK01": HawkState(
-                mode=VehicleMode.SIMULATED,
-                position=Position3D(x=0.0, y=0.0, alt=0.0),
-                battery=100.0,
-                connection=ConnectionStatus.ONLINE
             )
         }
     )

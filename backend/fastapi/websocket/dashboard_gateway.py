@@ -150,7 +150,7 @@ class DashboardGateway:
 
         vehicle_rows = (
             await session.execute(
-                select(Vehicle).where(Vehicle.id.in_(["SCOUT01", "HAWK01"]))
+                select(Vehicle).where(Vehicle.id.in_(["SCOUT01"]))
             )
         ).scalars().all()
 

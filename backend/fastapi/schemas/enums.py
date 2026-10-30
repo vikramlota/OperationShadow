@@ -20,7 +20,6 @@ class VehicleIdEnum(StrEnum):
     """Documented vehicle identifiers (§5.1, §7)."""
 
     SCOUT01 = "SCOUT01"
-    HAWK01 = "HAWK01"
 
 
 class EmergencyStopTargetEnum(StrEnum):
@@ -28,7 +27,6 @@ class EmergencyStopTargetEnum(StrEnum):
 
     ALL = "ALL"
     SCOUT01 = "SCOUT01"
-    HAWK01 = "HAWK01"
 
 
 class VehicleModeEnum(StrEnum):

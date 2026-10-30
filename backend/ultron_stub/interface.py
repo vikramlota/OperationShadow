@@ -16,8 +16,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Literal, Protocol, runtime_checkable
 
-VehicleId = Literal["SCOUT01", "HAWK01"]
-EmergencyStopTarget = Literal["ALL", "SCOUT01", "HAWK01"]
+VehicleId = Literal["SCOUT01"]
+EmergencyStopTarget = Literal["ALL", "SCOUT01"]
 VehicleMode = Literal["simulated", "real"]
 VehicleType = Literal["ground", "aerial"]
 CommandAckStatus = Literal["ACCEPTED", "REJECTED", "FAILED"]
@@ -45,7 +45,7 @@ class VehicleCommandEnvelopeStub:
         if not self.command_id or not self.command_id.strip():
             msg = "command_id must be a non-empty string"
             raise ValueError(msg)
-        if self.vehicle_id not in ("SCOUT01", "HAWK01"):
+        if self.vehicle_id != "SCOUT01":
             msg = f"Unsupported vehicle_id '{self.vehicle_id}'"
             raise ValueError(msg)
         if (

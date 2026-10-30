@@ -9,10 +9,10 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from ultron.schemas.world import (
-    WorldModel, MissionState, ScoutState, HawkState, VehicleMode, ConnectionStatus
+    WorldModel, MissionState, ScoutState, VehicleMode, ConnectionStatus
 )
 from ultron.schemas.mission import MissionStatus, VehicleID
-from ultron.schemas.commands import Position2D, Position3D
+from ultron.schemas.commands import Position2D
 from ultron.graph.workflow import build_ultron_graph
 from ultron.simulation.generator import SyntheticDataGenerator
 from ultron.evaluator.updater import update_world_model
@@ -36,12 +36,6 @@ async def test_ultron_pipeline():
             "SCOUT01": ScoutState(
                 mode=VehicleMode.SIMULATED,
                 position=Position2D(x=0.0, y=0.0),
-                battery=100.0,
-                connection=ConnectionStatus.ONLINE
-            ),
-            "HAWK01": HawkState(
-                mode=VehicleMode.SIMULATED,
-                position=Position3D(x=0.0, y=0.0, alt=0.0),
                 battery=100.0,
                 connection=ConnectionStatus.ONLINE
             )
@@ -72,8 +66,8 @@ async def test_ultron_pipeline():
         priority_label = getattr(task.priority, "name", str(task.priority))
         print(f"    -> [{task.vehicle}] {task.type} (Priority: {priority_label})")
 
-    # 3. Simulate Hazard Detection by HAWK at T+0s (fast test)
-    print("\n[2/4] Injecting synthetic hazard observation from HAWK01...")
+    # 3. Simulate Hazard Detection by SCOUT01 at T+0s (fast test)
+    print("\n[2/4] Injecting synthetic hazard observation from SCOUT01...")
     generator = SyntheticDataGenerator(hazard_delay_sec=0.0)
     observations = generator.generate_telemetry(state["world"])
     assert len(observations) > 0, "FAILED: No telemetry/observations generated."

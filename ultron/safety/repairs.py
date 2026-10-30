@@ -14,6 +14,6 @@ def build_repair_prompt(failed_plan_rationale: str, errors: List[str]) -> str:
     
     You must generate a new create_mission_plan tool call that resolves these errors. 
     Remember: Do not invent areas or targets not present in the provided world state, 
-    and never assign unconstrained navigation to HAWK01.
+    and only assign valid actions to SCOUT01.
     """
     

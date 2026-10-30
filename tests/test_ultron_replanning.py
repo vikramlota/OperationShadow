@@ -1,4 +1,4 @@
-from ultron.schemas.world import WorldModel, MissionState, HazardEntity, ScoutState, HawkState
+from ultron.schemas.world import WorldModel, MissionState, HazardEntity, ScoutState
 from ultron.schemas.commands import Position2D
 from ultron.schemas.mission import VehicleID
 from ultron.evaluator.triggers import check_replanning_triggers
@@ -9,13 +9,13 @@ def test_hazard_trigger_activates_replan():
     should_replan, _ = check_replanning_triggers(world)
     assert should_replan is False
 
-    # Inject hazard reported by HAWK
+    # Inject hazard reported by SCOUT
     world.environment.hazards.append(
         HazardEntity(
             id="H01",
             location=Position2D(x=5.1, y=3.0),
             confidence=0.89,
-            source_vehicle=VehicleID.HAWK,
+            source_vehicle=VehicleID.SCOUT,
             type="possible_hazard"
         )
     )
@@ -23,7 +23,7 @@ def test_hazard_trigger_activates_replan():
     should_replan, rationale = check_replanning_triggers(world)
     assert should_replan is True
     assert rationale is not None
-    assert "HAWK01" in rationale
+    assert "SCOUT01" in rationale
     assert "possible_hazard" in rationale
 
 

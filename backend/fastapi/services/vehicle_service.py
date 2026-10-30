@@ -68,8 +68,8 @@ from websocket.dashboard_gateway import DashboardGateway, dashboard_gateway
 
 
 def resolve_vehicle_id(raw_vehicle_id: str) -> VehicleId:
-    """Validate that `raw_vehicle_id` is SCOUT01 or HAWK01, or raise ResourceNotFoundError."""
-    if raw_vehicle_id not in ("SCOUT01", "HAWK01"):
+    """Validate that `raw_vehicle_id` is SCOUT01, or raise ResourceNotFoundError."""
+    if raw_vehicle_id != "SCOUT01":
         raise ResourceNotFoundError("Vehicle", raw_vehicle_id)
     return cast(VehicleId, raw_vehicle_id)
 
@@ -130,15 +130,12 @@ class VehicleService:
 
         self._adapters: dict[VehicleId, VehicleAdapterPort] = {
             "SCOUT01": self._simulator.scout,
-            "HAWK01": self._simulator.hawk,
         }
         self._unpersisted_heartbeat_counts: dict[VehicleId, int] = {
             "SCOUT01": 0,
-            "HAWK01": 0,
         }
         self._latest_heartbeats: dict[VehicleId, datetime | None] = {
             "SCOUT01": None,
-            "HAWK01": None,
         }
         self._monitor_task: asyncio.Task[None] | None = None
         self._monitor_running: bool = False
@@ -601,12 +598,12 @@ class VehicleService:
 
         rows = (
             await session.execute(
-                select(Vehicle).where(Vehicle.id.in_(["SCOUT01", "HAWK01"]))
+                select(Vehicle).where(Vehicle.id.in_(["SCOUT01"]))
             )
         ).scalars().all()
 
         for row in rows:
-            vehicle_id: VehicleId = "SCOUT01" if row.id == "SCOUT01" else "HAWK01"
+            vehicle_id: VehicleId = "SCOUT01"
             last_hb = self._latest_heartbeats.get(vehicle_id) or ensure_utc_datetime(
                 row.last_heartbeat
             )

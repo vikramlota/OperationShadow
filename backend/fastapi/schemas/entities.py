@@ -315,7 +315,7 @@ class VehicleSimulateAckResponse(SchemaBase):
 
 
 class EmergencyStopRequest(SchemaBase):
-    """POST /emergency-stop request payload (§7: `{ "vehicle_id": "ALL" | "SCOUT01" | "HAWK01" }`)."""
+    """POST /emergency-stop request payload (§7: `{ "vehicle_id": "ALL" | "SCOUT01" }`)."""
 
     vehicle_id: EmergencyStopTargetEnum
 
@@ -580,7 +580,7 @@ class FloorPlanConfigResponse(SchemaBase):
     height_m: Annotated[float, Field(gt=0.0, allow_inf_nan=False)]
     rooms: list[FloorPlanRoomSchema] = Field(default_factory=list)
     waypoints: list[FloorPlanWaypointSchema] = Field(default_factory=list)
-    hawk_geofence: FloorPlanGeofenceSchema
+    hawk_geofence: FloorPlanGeofenceSchema | None = None
 
 
 class MapUploadResponse(SchemaBase):

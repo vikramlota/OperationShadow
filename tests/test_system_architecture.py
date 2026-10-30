@@ -12,7 +12,6 @@ def test_trd_section_26_repository_layout():
     expected_top_level = [
         "ultron",
         "scout",
-        "hawk",
         "firmware",
         "backend",
         "dashboard",
@@ -42,10 +41,6 @@ def test_trd_section_26_repository_layout():
     # scout subdirectories specified in TRD §26
     for subdir in ["navigation", "sensors", "communication"]:
         assert (root / "scout" / subdir).is_dir(), f"Expected scout subdirectory '{subdir}' missing"
-
-    # hawk subdirectories specified in TRD §26
-    for subdir in ["flight_interface", "sensors", "communication"]:
-        assert (root / "hawk" / subdir).is_dir(), f"Expected hawk subdirectory '{subdir}' missing"
 
     # firmware subdirectories specified in TRD §26
     for subdir in ["motors", "sensors", "safety"]:

@@ -47,7 +47,7 @@ def node_validate(state: UltronState) -> Dict[str, Any]:
 
 
 def node_assign(state: UltronState) -> Dict[str, Any]:
-    """Dispatches the validated plan's tasks to SCOUT and HAWK and updates task tracking."""
+    """Dispatches the validated plan's tasks to SCOUT01 and updates task tracking."""
     valid_plan = state.get("proposed_plan")
     world = state["world"]
     if valid_plan:

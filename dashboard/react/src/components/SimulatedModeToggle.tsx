@@ -61,7 +61,7 @@ export function SimulatedModeToggle(): React.JSX.Element {
           failsafes are verified.
         </div>
 
-        {(["SCOUT01", "HAWK01"] as const).map((vid) => {
+        {(["SCOUT01"] as const).map((vid) => {
           const v = state.vehicles[vid];
           const isBusy = busyVehicle === vid;
           return (

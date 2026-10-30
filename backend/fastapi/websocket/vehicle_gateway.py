@@ -86,15 +86,7 @@ class VehicleGatewayFastPath:
         """Execute the Emergency Stop Fast Path (§10) without calling ULTRON or awaiting DB writes."""
         start_perf = time.perf_counter()
 
-        target_ids: list[VehicleId] = (
-            ["SCOUT01", "HAWK01"]
-            if target == EmergencyStopTargetEnum.ALL
-            else [
-                "SCOUT01"
-                if target == EmergencyStopTargetEnum.SCOUT01
-                else "HAWK01"
-            ]
-        )
+        target_ids: list[VehicleId] = ["SCOUT01"]
 
         outcomes: dict[VehicleIdEnum, VehicleEmergencyStopOutcome] = {}
 
@@ -226,9 +218,7 @@ class VehicleGatewayFastPath:
         try:
             async with session_factory() as session:
                 for vid_enum, outcome in outcomes.items():
-                    vid: VehicleId = (
-                        "SCOUT01" if vid_enum == VehicleIdEnum.SCOUT01 else "HAWK01"
-                    )
+                    vid: VehicleId = "SCOUT01"
                     row = (
                         await session.execute(select(Vehicle).where(Vehicle.id == vid))
                     ).scalar_one_or_none()
@@ -375,7 +365,7 @@ class VehicleGateway:
             or websocket.query_params.get("vehicle_id")
             or websocket.headers.get("x-vehicle-id")
         )
-        if candidate_id not in ("SCOUT01", "HAWK01"):
+        if candidate_id != "SCOUT01":
             logger.warning(f"Rejecting vehicle WebSocket connection: unrecognized vehicle ID '{candidate_id}'.")
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid vehicle ID")
             return

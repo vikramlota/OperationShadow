@@ -170,19 +170,6 @@ export const initialDashboardState: DashboardState = {
       activeTaskId: null,
       lastSequence: 0,
     },
-    HAWK01: {
-      id: "HAWK01",
-      vehicleType: "aerial",
-      status: "IDLE",
-      connection: "DISCONNECTED",
-      mode: "simulated",
-      battery: 100,
-      position: { x: 0, y: 0, alt: 0 },
-      lastHeartbeat: null,
-      isStale: false,
-      activeTaskId: null,
-      lastSequence: 0,
-    },
   },
   observations: [],
   events: [],
@@ -312,12 +299,6 @@ export function dashboardReducer(
         nextVehicles.SCOUT01 = mapVehicleReadToSummary(
           snap.vehicles.SCOUT01,
           state.vehicles.SCOUT01,
-        );
-      }
-      if (snap.vehicles.HAWK01) {
-        nextVehicles.HAWK01 = mapVehicleReadToSummary(
-          snap.vehicles.HAWK01,
-          state.vehicles.HAWK01,
         );
       }
 

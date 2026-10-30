@@ -676,7 +676,6 @@ class MockFleetSimulator:
         )
         self._vehicles: dict[VehicleId, MockVehicleAdapter] = {
             "SCOUT01": self._scout,
-            "HAWK01": self._hawk,
         }
 
     @property
@@ -699,16 +698,12 @@ class MockFleetSimulator:
 
     async def start_all(self) -> None:
         await self._scout.start()
-        await self._hawk.start()
 
     async def stop_all(self) -> None:
         await self._scout.stop()
-        await self._hawk.stop()
 
     async def step_all(self) -> dict[VehicleId, TelemetryPayloadStub | None]:
         scout_telem = await self._scout.step()
-        hawk_telem = await self._hawk.step()
         return {
             "SCOUT01": scout_telem,
-            "HAWK01": hawk_telem,
         }

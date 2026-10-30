@@ -13,8 +13,8 @@ def get_fallback_plan(mission_id: str) -> MissionPlan:
         tasks=[
             Task(
                 id="T-CACHE-01",
-                vehicle=VehicleID.HAWK,
-                type="HOVER_SCAN",
+                vehicle=VehicleID.SCOUT,
+                type="NAVIGATE",
                 area="zone_2",
                 priority=TaskPriority.HIGH
             ),
@@ -28,7 +28,7 @@ def get_fallback_plan(mission_id: str) -> MissionPlan:
             Task(
                 id="T-CACHE-03",
                 vehicle=VehicleID.SCOUT,
-                type="FIND_TARGET",
+                type="INSPECT",
                 target="red_package",
                 priority=TaskPriority.LOW
             )

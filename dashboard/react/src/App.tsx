@@ -57,20 +57,18 @@ export default function App({
   }, [dispatch, state.hardwareLockout, state.ultronIsStub]);
 
   const scout = state.vehicles.SCOUT01;
-  const hawk = state.vehicles.HAWK01;
-  const allSimulated =
-    scout.mode === "simulated" && hawk.mode === "simulated";
+  const allSimulated = scout.mode === "simulated";
 
   const globalWarnings: string[] = [];
   if (allSimulated) {
     globalWarnings.push(
-      "SIMULATION MODE ACTIVE — SCOUT01 AND HAWK01 ARE RUNNING ON MOCK ADAPTERS (NO PHYSICAL VEHICLES CONNECTED)",
+      "SIMULATION MODE ACTIVE — SCOUT01 IS RUNNING ON MOCK ADAPTER (NO PHYSICAL VEHICLE CONNECTED)",
     );
   }
   if (!wsStatus.connected && wsStatus.lastError) {
     globalWarnings.push(`WS STATUS: ${wsStatus.lastError}`);
   }
-  for (const v of [scout, hawk]) {
+  for (const v of [scout]) {
     if (v.status === "EMERGENCY_STOPPED") {
       globalWarnings.push(`${v.id} IS IN EMERGENCY_STOPPED STATE`);
     } else if (v.connection === "UNKNOWN" || v.status === "UNKNOWN") {
@@ -90,7 +88,7 @@ export default function App({
               Operation Shadow — Mission Control
             </h1>
             <div className="c2-brand-subtitle">
-              INDOOR MULTI-VEHICLE TACTICAL C2 WORKSTATION // SCOUT01 &amp; HAWK01
+              INDOOR ROVER TACTICAL C2 WORKSTATION // SCOUT01
             </div>
           </div>
         </div>
@@ -147,7 +145,6 @@ export default function App({
             style={{ display: "flex", flexDirection: "column", gap: "6px" }}
           >
             <VehicleStatusCard vehicle={scout} />
-            <VehicleStatusCard vehicle={hawk} />
           </section>
           <SimulatedModeToggle />
         </div>

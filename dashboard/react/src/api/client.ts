@@ -12,11 +12,8 @@ export const WS_DASHBOARD_URL: string =
 export const DEFAULT_SCOUT_STREAM_URL: string =
   import.meta.env.VITE_SCOUT01_STREAM_URL ?? "";
 
-export const DEFAULT_HAWK_STREAM_URL: string =
-  import.meta.env.VITE_HAWK01_STREAM_URL ?? "";
-
-export type VehicleId = "SCOUT01" | "HAWK01";
-export type EmergencyStopTarget = "ALL" | "SCOUT01" | "HAWK01";
+export type VehicleId = "SCOUT01";
+export type EmergencyStopTarget = "ALL" | "SCOUT01";
 export type VehicleMode = "simulated" | "real";
 export type VehicleType = "ground" | "aerial";
 export type VehicleConnectionState = "CONNECTED" | "DISCONNECTED" | "UNKNOWN";

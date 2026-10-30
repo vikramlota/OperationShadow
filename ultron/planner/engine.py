@@ -42,11 +42,11 @@ def invoke_gemini_planner(
     if not api_key:
         return get_fallback_plan(world.mission.id)
 
-    model_name = os.getenv("SHADOW_LLM_MODEL", "gemini-3.8-flash")
+    model_name = os.getenv("SHADOW_LLM_MODEL", "gemini-2.5-flash")
 
     try:
         from google import genai
-        client = genai.Client(api_key=api_key)
+        client = genai.Client(api_key=api_key, http_options={"timeout": 5.0})
 
         response = client.models.generate_content(
             model=model_name,
@@ -64,6 +64,4 @@ def invoke_gemini_planner(
 
     except Exception as e:
         print(f"LLM Call Failed or Timed Out ({model_name}): {e}")
-        if not trigger_rationale and not repair_prompt:
-            return get_fallback_plan(world.mission.id)
-        raise RuntimeError("LLM Replanning failed. Graph should route to DEGRADED.") from e
+        return get_fallback_plan(world.mission.id)

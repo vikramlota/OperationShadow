@@ -62,7 +62,7 @@ class ObjectEntity(BaseModel):
 class TaskTracker(BaseModel):
     completed: List[str] = Field(default_factory=list)
     active: Dict[VehicleID, Optional[str]] = Field(
-        default_factory=lambda: {VehicleID.SCOUT: None, VehicleID.HAWK: None}
+        default_factory=lambda: {VehicleID.SCOUT: None}
     )
     pending: List[str] = Field(default_factory=list)
 
@@ -86,7 +86,6 @@ class WorldModel(BaseModel):
     vehicles: Dict[str, Union[ScoutState, HawkState]] = Field(
         default_factory=lambda: {
             "SCOUT01": ScoutState(),
-            "HAWK01": HawkState()
         }
     )
     environment: EnvironmentState = Field(default_factory=EnvironmentState)

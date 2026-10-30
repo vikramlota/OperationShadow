@@ -61,7 +61,7 @@ export function EmergencyStopButton(): React.JSX.Element {
           FAST-PATH E-STOP:
         </span>
 
-        {(["ALL", "SCOUT01", "HAWK01"] as const).map((target) => (
+        {(["ALL", "SCOUT01"] as const).map((target) => (
           <button
             key={target}
             type="button"

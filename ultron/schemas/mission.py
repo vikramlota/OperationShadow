@@ -5,7 +5,6 @@ from pydantic import BaseModel, Field
 
 class VehicleID(str, Enum):
     SCOUT = "SCOUT01"
-    HAWK = "HAWK01"
 
 
 class MissionStatus(str, Enum):
@@ -24,7 +23,7 @@ class TaskPriority(int, Enum):
 
 class Task(BaseModel):
     id: str = Field(description="Unique identifier for the task, e.g., 'T001'")
-    vehicle: VehicleID = Field(description="Designated vehicle executing this task: SCOUT01 or HAWK01")
+    vehicle: VehicleID = Field(description="Designated vehicle executing this task: SCOUT01")
     type: str = Field(
         description="High-level task action, e.g., 'explore', 'aerial_scan', 'find_target'"
     )

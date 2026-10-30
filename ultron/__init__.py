@@ -1,6 +1,6 @@
 """
 ULTRON Agent Module for Operation Shadow.
-Coordinates SCOUT (ground) and HAWK (aerial) vehicles using hierarchical mission intelligence.
+Coordinates SCOUT (ground rover) vehicle using hierarchical mission intelligence.
 """
 
 from ultron.config import config

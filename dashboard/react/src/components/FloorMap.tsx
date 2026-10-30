@@ -203,7 +203,7 @@ export function FloorMap(): React.JSX.Element {
           }}
         >
           <div style={{ display: "flex", gap: "6px" }}>
-            {(["SCOUT01", "HAWK01"] as const).map((vid) => {
+            {(["SCOUT01"] as const).map((vid) => {
               const v = state.vehicles[vid];
               const isSelected = state.selectedVehicleId === vid;
               return (
@@ -351,28 +351,30 @@ export function FloorMap(): React.JSX.Element {
             );
           })}
 
-          {/* HAWK01 Geofence Boundary */}
-          <g data-testid="map-hawk-geofence">
-            <rect
-              x={geofenceRect.x}
-              y={geofenceRect.y}
-              width={geofenceRect.width}
-              height={geofenceRect.height}
-              fill="none"
-              stroke="#D98A2B"
-              strokeWidth="1.5"
-              strokeDasharray="6 4"
-            />
-            <text
-              x={geofenceRect.x + 8}
-              y={geofenceRect.y + geofenceRect.height - 8}
-              fill="#D98A2B"
-              fontSize="10"
-              fontFamily="monospace"
-            >
-              {activeMap.hawk_geofence.label.toUpperCase()}
-            </text>
-          </g>
+          {/* Optional Flight Envelope Geofence Boundary if present */}
+          {activeMap.hawk_geofence && (
+            <g data-testid="map-hawk-geofence">
+              <rect
+                x={geofenceRect.x}
+                y={geofenceRect.y}
+                width={geofenceRect.width}
+                height={geofenceRect.height}
+                fill="none"
+                stroke="#D98A2B"
+                strokeWidth="1.5"
+                strokeDasharray="6 4"
+              />
+              <text
+                x={geofenceRect.x + 8}
+                y={geofenceRect.y + geofenceRect.height - 8}
+                fill="#D98A2B"
+                fontSize="10"
+                fontFamily="monospace"
+              >
+                {activeMap.hawk_geofence.label.toUpperCase()}
+              </text>
+            </g>
+          )}
 
           {/* Fixed Waypoints */}
           {activeMap.waypoints.map((wp) => {
@@ -426,8 +428,8 @@ export function FloorMap(): React.JSX.Element {
             );
           })}
 
-          {/* Vehicle Markers: SCOUT01 (ground diamond) & HAWK01 (aerial reticle) */}
-          {(["SCOUT01", "HAWK01"] as const).map((vid) => {
+          {/* Vehicle Marker: SCOUT01 (ground diamond) */}
+          {(["SCOUT01"] as const).map((vid) => {
             const v = state.vehicles[vid];
             const vx = worldToSvgX(v.position.x, widthM);
             const vy = worldToSvgY(v.position.y, heightM);
@@ -524,7 +526,6 @@ export function FloorMap(): React.JSX.Element {
                   fontFamily="monospace"
                 >
                   X:{v.position.x.toFixed(2)}m Y:{v.position.y.toFixed(2)}m
-                  {vid === "HAWK01" ? ` ALT:${v.position.alt.toFixed(2)}m` : ""}
                 </text>
               </g>
             );

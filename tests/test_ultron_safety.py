@@ -1,28 +1,28 @@
 from ultron.schemas.mission import MissionPlan, Task, VehicleID, TaskPriority
-from ultron.schemas.world import WorldModel, MissionState, ScoutState, HawkState
+from ultron.schemas.world import WorldModel, MissionState, ScoutState
 from ultron.safety.validator import validate_plan
 from ultron.safety.constraints import is_within_geofence
 from ultron.schemas.commands import Position3D
 
 
-def test_validator_detects_forbidden_hawk_action():
+def test_validator_detects_forbidden_scout_action():
     world = WorldModel(mission=MissionState(id="M001", objective="test"))
     bad_plan = MissionPlan(
         mission_id="M001",
         objective="test",
-        rationale="Testing illegal HAWK free navigation",
+        rationale="Testing illegal SCOUT action",
         tasks=[
             Task(
                 id="T001",
-                vehicle=VehicleID.HAWK,
-                type="FREE_NAVIGATE",  # strictly forbidden for HAWK
+                vehicle=VehicleID.SCOUT,
+                type="FLY_OVERWATCH",  # strictly forbidden for SCOUT
                 priority=TaskPriority.HIGH
             )
         ]
     )
     is_valid, errors = validate_plan(bad_plan, world)
     assert not is_valid
-    assert any("strictly forbidden for HAWK01" in err for err in errors)
+    assert any("not a permitted action for SCOUT01" in err for err in errors)
 
 
 def test_validator_accepts_valid_plan():
@@ -34,8 +34,8 @@ def test_validator_accepts_valid_plan():
         tasks=[
             Task(
                 id="T001",
-                vehicle=VehicleID.HAWK,
-                type="HOVER_SCAN",
+                vehicle=VehicleID.SCOUT,
+                type="NAVIGATE",
                 area="zone_2",
                 priority=TaskPriority.HIGH
             ),

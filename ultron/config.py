@@ -11,7 +11,6 @@ class UltronConfig(BaseModel):
     hardware_lockout: bool = Field(default=True)
     default_vehicle_mode: str = Field(default="simulated")
     scout_id: str = "SCOUT01"
-    hawk_id: str = "HAWK01"
 
 
 config = UltronConfig(

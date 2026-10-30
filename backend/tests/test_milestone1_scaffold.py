@@ -34,7 +34,7 @@ async def test_health_endpoint_returns_expected_defaults() -> None:
     assert payload["hardware_lockout"] is True
     assert payload["default_vehicle_mode"] == "simulated"
     assert isinstance(payload["ultron_is_stub"], bool)
-    assert payload["vehicles"] == ["HAWK01", "SCOUT01"]
+    assert payload["vehicles"] == ["SCOUT01"]
 
 
 async def test_async_sqlite_engine_connectivity() -> None:
@@ -102,4 +102,4 @@ async def test_ultron_stub_protocol_compliance() -> None:
     assert snapshot.is_stub is True
     assert snapshot.active_mission_id is None
     assert "SCOUT01" in snapshot.vehicles
-    assert "HAWK01" in snapshot.vehicles
+    assert "HAWK01" not in snapshot.vehicles

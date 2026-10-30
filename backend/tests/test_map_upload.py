@@ -47,10 +47,10 @@ def test_upload_map_optional_single_file(tmp_path: Path, monkeypatch: pytest.Mon
         "visual_map": ("visual_map.ply", io.BytesIO(b"ONLY_PLY"), "application/octet-stream"),
     }
 
-    resp = client.post("/upload-map/HAWK01", files=files)
+    resp = client.post("/upload-map/SCOUT01", files=files)
     assert resp.status_code == 200
     data = resp.json()
-    assert data["vehicle_id"] == "HAWK01"
+    assert data["vehicle_id"] == "SCOUT01"
     assert data["saved_files"] == ["visual_map.ply"]
 
     saved_dir = tmp_path / "saved_maps"

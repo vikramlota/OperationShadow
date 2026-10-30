@@ -115,8 +115,8 @@ async def test_all_six_models_persist_and_load_relationships(
     task_hawk = Task(
         id="T002",
         mission_id="M001",
-        vehicle_id="HAWK01",
-        type="OVERWATCH_SCAN",
+        vehicle_id="SCOUT01",
+        type="INSPECT",
         area="Sector-A2",
         target="Thermal Source",
         priority=2,
@@ -145,7 +145,7 @@ async def test_all_six_models_persist_and_load_relationships(
         mission_id="M001",
         timestamp=now,
         trigger="SCOUT01 reported corridor obstruction in Sector-A1",
-        rationale="Rerouting HAWK01 to aerial overwatch over Sector-A2 while SCOUT01 holds.",
+        rationale="Rerouting SCOUT01 to inspect Sector-A2.",
         resulting_task_ids=["T001", "T002"],
     )
 
@@ -182,8 +182,8 @@ async def test_all_six_models_persist_and_load_relationships(
         .options(selectinload(Vehicle.tasks), selectinload(Vehicle.observations))
     )
     loaded_scout = (await db_session.execute(scout_stmt)).scalar_one()
-    assert len(loaded_scout.tasks) == 1
-    assert loaded_scout.tasks[0].id == "T001"
+    assert len(loaded_scout.tasks) == 2
+    assert {t.id for t in loaded_scout.tasks} == {"T001", "T002"}
     assert len(loaded_scout.observations) == 1
     assert loaded_scout.observations[0].id == "OBS001"
 
@@ -284,7 +284,7 @@ async def test_orm_records_serialize_cleanly_through_pydantic_schemas(
     task = Task(
         id="T010",
         mission_id="M002",
-        vehicle_id="HAWK01",
+        vehicle_id="SCOUT01",
         type="SCAN",
         area="Room-B",
         target="Marker-1",
@@ -294,7 +294,7 @@ async def test_orm_records_serialize_cleanly_through_pydantic_schemas(
     obs = Observation(
         id="OBS010",
         mission_id="M002",
-        vehicle_id="HAWK01",
+        vehicle_id="SCOUT01",
         obs_type="qr_marker",
         confidence=0.99,
         location_x=3.0,
@@ -327,8 +327,8 @@ async def test_orm_records_serialize_cleanly_through_pydantic_schemas(
             .options(selectinload(Mission.tasks))
         )
     ).scalar_one()
-    loaded_hawk = (
-        await db_session.execute(select(Vehicle).where(Vehicle.id == "HAWK01"))
+    loaded_scout = (
+        await db_session.execute(select(Vehicle).where(Vehicle.id == "SCOUT01"))
     ).scalar_one()
 
     mission_schema = MissionDetailRead.model_validate(loaded_mission)
@@ -337,8 +337,8 @@ async def test_orm_records_serialize_cleanly_through_pydantic_schemas(
     assert len(mission_schema.tasks) == 1
     assert mission_schema.tasks[0].id == "T010"
 
-    vehicle_schema = VehicleRead.model_validate(loaded_hawk)
-    assert vehicle_schema.id == VehicleIdEnum.HAWK01
+    vehicle_schema = VehicleRead.model_validate(loaded_scout)
+    assert vehicle_schema.id == VehicleIdEnum.SCOUT01
     assert vehicle_schema.mode == VehicleModeEnum.SIMULATED
 
     obs_schema = ObservationRead.model_validate(obs)
@@ -578,7 +578,7 @@ def test_websocket_contracts_validate_all_types_and_reject_malformed() -> None:
                 "mission_id": "M001",
                 "timestamp": now.isoformat(),
                 "trigger": "Obstacle detected",
-                "rationale": "Reassigning sector scan to HAWK01",
+                "rationale": "Reassigning sector scan to SCOUT01",
                 "resulting_task_ids": ["T002"],
             },
         }
@@ -614,23 +614,12 @@ def test_websocket_contracts_validate_all_types_and_reject_malformed() -> None:
                 connection=VehicleConnectionStateEnum.DISCONNECTED,
                 mode=VehicleModeEnum.SIMULATED,
             ),
-            VehicleIdEnum.HAWK01: VehicleRead(
-                id=VehicleIdEnum.HAWK01,
-                vehicle_type=VehicleTypeEnum.AERIAL,
-                status=VehicleStatusEnum.IDLE,
-                battery=100.0,
-                position_x=0.0,
-                position_y=0.0,
-                position_alt=0.0,
-                connection=VehicleConnectionStateEnum.DISCONNECTED,
-                mode=VehicleModeEnum.SIMULATED,
-            ),
         },
         recent_events=[],
         recent_reasoning_traces=[],
     )
     assert snapshot.protocol_version == "1.0"
-    assert set(snapshot.vehicles.keys()) == {VehicleIdEnum.SCOUT01, VehicleIdEnum.HAWK01}
+    assert set(snapshot.vehicles.keys()) == {VehicleIdEnum.SCOUT01}
 
     # 6) Reject unknown envelope type or mismatched payload
     with pytest.raises(ValidationError):
@@ -646,18 +635,18 @@ def test_websocket_contracts_validate_all_types_and_reject_malformed() -> None:
 
     # 7) Vehicle inbound/outbound stubs & rejection of arbitrary free-form command text (§5.1)
     inbound_telem = VehicleInboundTelemetryStub(
-        vehicle_id=VehicleIdEnum.HAWK01,
+        vehicle_id=VehicleIdEnum.SCOUT01,
         battery=91.0,
         position_x=1.0,
         position_y=2.0,
-        position_alt=1.5,
+        position_alt=0.0,
     )
     assert inbound_telem.protocol_version == "1.0-stub"
 
     inbound_obs = VehicleInboundObservationStub(
         observation_id="OBS200",
         mission_id="M001",
-        vehicle_id=VehicleIdEnum.HAWK01,
+        vehicle_id=VehicleIdEnum.SCOUT01,
         obs_type="thermal_signature",
         confidence=0.88,
         location_x=5.0,
@@ -691,13 +680,13 @@ async def test_db_init_idempotency_session_rollback_logging_and_errors(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     """Verify idempotent vehicle seeding, session_scope rollback, JSON logging, and error schemas."""
-    # Calling init_db again must not duplicate SCOUT01 or HAWK01
+    # Calling init_db again must not duplicate SCOUT01
     await init_db(isolated_engine, seed_defaults=True)
 
     async with session_factory() as session:
         vehicles = (await session.execute(select(Vehicle))).scalars().all()
-        assert len(vehicles) == 2
-        assert {v.id for v in vehicles} == {"SCOUT01", "HAWK01"}
+        assert len(vehicles) == 1
+        assert {v.id for v in vehicles} == {"SCOUT01"}
 
     # Verify session_scope rolls back on exception without leaking partial writes
     with pytest.raises(RuntimeError, match="simulated failure"):
@@ -790,5 +779,5 @@ async def test_isolation_step_b_verify_clean_database(db_session: AsyncSession) 
 
     # Default seeded vehicles are still present and in simulated mode
     vehicles = (await db_session.execute(select(Vehicle))).scalars().all()
-    assert {v.id for v in vehicles} == {"SCOUT01", "HAWK01"}
+    assert {v.id for v in vehicles} == {"SCOUT01"}
     assert all(v.mode == "simulated" for v in vehicles)

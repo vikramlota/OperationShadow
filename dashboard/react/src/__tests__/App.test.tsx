@@ -91,7 +91,7 @@ describe("Operation Shadow Milestone 5 & 6 Tactical Command Dashboard", () => {
       hardware_lockout: true,
       default_vehicle_mode: "simulated",
       ultron_is_stub: true,
-      vehicles: ["HAWK01", "SCOUT01"],
+      vehicles: ["SCOUT01"],
     });
     vi.spyOn(apiClient, "fetchFloorMap").mockResolvedValue(DEFAULT_FLOOR_MAP);
   });
@@ -118,8 +118,8 @@ describe("Operation Shadow Milestone 5 & 6 Tactical Command Dashboard", () => {
       screen.getByRole("article", { name: "Vehicle SCOUT01" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("article", { name: "Vehicle HAWK01" }),
-    ).toBeInTheDocument();
+      screen.queryByRole("article", { name: "Vehicle HAWK01" }),
+    ).not.toBeInTheDocument();
     expect(
       screen.getByText(/Hardware Lockout:\s*ACTIVE \(Simulated Only\)/i),
     ).toBeInTheDocument();
@@ -246,18 +246,6 @@ describe("Operation Shadow Milestone 5 & 6 Tactical Command Dashboard", () => {
               mode: "simulated",
               last_heartbeat: new Date().toISOString(),
             },
-            HAWK01: {
-              id: "HAWK01",
-              vehicle_type: "aerial",
-              status: "UNKNOWN",
-              battery: 72.0,
-              position_x: 10.0,
-              position_y: 7.5,
-              position_alt: 1.8,
-              connection: "UNKNOWN",
-              mode: "simulated",
-              last_heartbeat: "2026-10-20T00:00:00Z",
-            },
           },
           recent_events: [
             {
@@ -287,12 +275,9 @@ describe("Operation Shadow Milestone 5 & 6 Tactical Command Dashboard", () => {
     const scoutCard = screen.getByRole("article", { name: "Vehicle SCOUT01" });
     expect(within(scoutCard).getByText("84.5%")).toBeInTheDocument();
     expect(within(scoutCard).getByText("5.00m")).toBeInTheDocument();
-
-    const hawkCard = screen.getByRole("article", { name: "Vehicle HAWK01" });
     expect(
-      within(hawkCard).getByText(/WARNING: HEARTBEAT TIMEOUT — STATE UNKNOWN/i),
-    ).toBeInTheDocument();
-    expect(within(hawkCard).getByText(/72.0% \[LAST KNOWN\]/i)).toBeInTheDocument();
+      screen.queryByRole("article", { name: "Vehicle HAWK01" }),
+    ).not.toBeInTheDocument();
 
     expect(screen.getByText("Mission M002 active")).toBeInTheDocument();
     expect(
@@ -448,12 +433,12 @@ describe("Operation Shadow Milestone 5 & 6 Tactical Command Dashboard", () => {
             mission_id: "M001",
             timestamp: "2026-10-28T10:00:01Z",
             trigger: "Operator submitted M001",
-            rationale: "[ULTRON_STUB] Assigned SCOUT01 and HAWK01",
-            resulting_task_ids: ["M001-T01", "M001-T02"],
+            rationale: "[ULTRON_STUB] Assigned SCOUT01",
+            resulting_task_ids: ["M001-T01"],
           },
           world_model_snapshot: {
             is_stub: true,
-            resulting_task_ids: ["M001-T01", "M001-T02"],
+            resulting_task_ids: ["M001-T01"],
           },
         },
       ],
@@ -527,11 +512,11 @@ describe("Operation Shadow Milestone 5 & 6 Tactical Command Dashboard", () => {
   it("requires confirmation for E-Stop, displays partial failure, and distinguishes HTTP acceptance from confirmed stop", async () => {
     const estopSpy = vi
       .spyOn(apiClient, "triggerEmergencyStop")
-      // First call: partial failure (SCOUT01 failed/disconnected, HAWK01 confirmed stopped)
+      // First call: failed stop (SCOUT01 failed/disconnected)
       .mockResolvedValueOnce({
         request_accepted: true,
         target: "ALL",
-        overall_outcome: "PARTIAL_STOPPED",
+        overall_outcome: "NONE_CONFIRMED_STOPPED",
         all_confirmed_stopped: false,
         any_dispatch_failed: true,
         hardware_lockout_active: true,
@@ -557,23 +542,6 @@ describe("Operation Shadow Milestone 5 & 6 Tactical Command Dashboard", () => {
             acknowledged_at: null,
             reason:
               "Simulated vehicle SCOUT01 is DISCONNECTED; stop signal could not be delivered or confirmed.",
-          },
-          HAWK01: {
-            vehicle_id: "HAWK01",
-            mode: "simulated",
-            is_simulated: true,
-            real_hardware_available: false,
-            connection_at_dispatch: "CONNECTED",
-            dispatch_attempted: true,
-            dispatch_succeeded: true,
-            vehicle_acknowledged: true,
-            vehicle_confirmed_stopped: true,
-            resulting_status: "EMERGENCY_STOPPED",
-            was_already_stopped: false,
-            dispatched_at: "2026-10-28T10:05:00Z",
-            acknowledged_at: "2026-10-28T10:05:00Z",
-            reason:
-              "Simulated emergency stop acknowledged and confirmed by HAWK01.",
           },
         },
       });
@@ -603,7 +571,7 @@ describe("Operation Shadow Milestone 5 & 6 Tactical Command Dashboard", () => {
     const summary = screen.getByTestId("estop-outcome-summary");
     expect(
       within(summary).getByText(
-        /HTTP REQUEST ACCEPTED: YES \/\/ OVERALL: PARTIAL_STOPPED/i,
+        /HTTP REQUEST ACCEPTED: YES \/\/ OVERALL: NONE_CONFIRMED_STOPPED/i,
       ),
     ).toBeInTheDocument();
 
@@ -616,17 +584,6 @@ describe("Operation Shadow Milestone 5 & 6 Tactical Command Dashboard", () => {
     ).toBeInTheDocument();
     expect(
       within(scoutOutcome).getByText(/CONFIRMED STOPPED: NO \(UNCONFIRMED\)/i),
-    ).toBeInTheDocument();
-
-    const hawkOutcome = screen.getByTestId("estop-vehicle-outcome-HAWK01");
-    expect(
-      within(hawkOutcome).getByText(/DISPATCH: SUCCEEDED/i),
-    ).toBeInTheDocument();
-    expect(
-      within(hawkOutcome).getByText(/VEHICLE ACK: YES/i),
-    ).toBeInTheDocument();
-    expect(
-      within(hawkOutcome).getByText(/CONFIRMED STOPPED: YES/i),
     ).toBeInTheDocument();
   });
 

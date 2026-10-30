@@ -139,7 +139,7 @@ async def test_complete_end_to_end_simulated_mission_workflow(
             assert snap1["type"] == "snapshot"
             assert snap1["payload"]["current_mission"] is None
             assert snap1["payload"]["vehicles"]["SCOUT01"]["mode"] == "simulated"
-            assert snap1["payload"]["vehicles"]["HAWK01"]["mode"] == "simulated"
+            assert "HAWK01" not in snap1["payload"]["vehicles"]
 
             # Step 5-6: Submit a simulated mission objective and verify tasks, event, and trace
             create_res = client.post(
@@ -159,16 +159,13 @@ async def test_complete_end_to_end_simulated_mission_workflow(
             assert mission_res.status_code == 200
             m_detail = mission_res.json()
             assert m_detail["status"] == "ACTIVE"
-            assert len(m_detail["tasks"]) == 2
-            assert {t["vehicle_id"] for t in m_detail["tasks"]} == {"SCOUT01", "HAWK01"}
+            assert len(m_detail["tasks"]) == 1
+            assert {t["vehicle_id"] for t in m_detail["tasks"]} == {"SCOUT01"}
 
             # Step 7-8: Verify simulated mode toggle & hardware lockout, connect vehicles, step telemetry, and record observations
             sim_scout = client.post("/vehicle/SCOUT01/simulate", json={"enabled": True})
-            sim_hawk = client.post("/vehicle/HAWK01/simulate", json={"enabled": True})
             assert sim_scout.status_code == 200
-            assert sim_hawk.status_code == 200
             _ = ws1.receive_json()  # SCOUT01 mode broadcast
-            _ = ws1.receive_json()  # HAWK01 mode broadcast
 
             lockout_res = client.post("/vehicle/SCOUT01/simulate", json={"enabled": False})
             assert lockout_res.status_code == 409
@@ -176,12 +173,9 @@ async def test_complete_end_to_end_simulated_mission_workflow(
 
             async with session_factory() as session:
                 await vehicle_svc.connect_vehicle(session, "SCOUT01")
-                await vehicle_svc.connect_vehicle(session, "HAWK01")
             _ = ws1.receive_json()  # SCOUT01 connected broadcast
-            _ = ws1.receive_json()  # HAWK01 connected broadcast
 
             simulator.scout.set_target_position(6.0, 4.0)
-            simulator.hawk.set_target_position(10.0, 8.0, alt=2.2)
 
             async with session_factory() as session:
                 clock.advance(milliseconds=250)
@@ -202,11 +196,7 @@ async def test_complete_end_to_end_simulated_mission_workflow(
                 await vehicle_svc.record_observation(session, obs_stub)
 
             t_msg_1 = ws1.receive_json()
-            t_msg_2 = ws1.receive_json()
-            assert {t_msg_1["payload"]["vehicle_id"], t_msg_2["payload"]["vehicle_id"]} == {
-                "SCOUT01",
-                "HAWK01",
-            }
+            assert t_msg_1["payload"]["vehicle_id"] == "SCOUT01"
 
             obs_res = client.get(
                 "/vehicle/SCOUT01/observations",
@@ -226,20 +216,15 @@ async def test_complete_end_to_end_simulated_mission_workflow(
 
             async with session_factory() as session:
                 timed_out = await vehicle_svc.evaluate_heartbeats(session)
-                assert set(timed_out) == {"SCOUT01", "HAWK01"}
+                assert set(timed_out) == {"SCOUT01"}
 
             unknown_frame_1 = ws1.receive_json()
-            unknown_frame_2 = ws1.receive_json()
             assert unknown_frame_1["payload"]["connection"] == "UNKNOWN"
-            assert unknown_frame_2["payload"]["connection"] == "UNKNOWN"
 
             async with session_factory() as session:
                 await vehicle_svc.reconnect_vehicle(session, "SCOUT01")
-                await vehicle_svc.reconnect_vehicle(session, "HAWK01")
             rec_1 = ws1.receive_json()
-            rec_2 = ws1.receive_json()
             assert rec_1["payload"]["connection"] == "CONNECTED"
-            assert rec_2["payload"]["connection"] == "CONNECTED"
 
             # Step 11-12: Complete the simulated mission and verify replay timeline
             complete_res = client.post(f"/mission/{mission_id}/complete")
@@ -280,20 +265,14 @@ async def test_complete_end_to_end_simulated_mission_workflow(
             _ = ws1.receive_json()
             _ = ws1.receive_json()
 
-            # Inject transport fault on SCOUT01 and trigger ALL E-Stop -> PARTIAL_STOPPED
+            # Inject transport fault on SCOUT01 and trigger ALL E-Stop -> NONE_CONFIRMED_STOPPED
             simulator.scout.configure_faults(fail_emergency_stop_dispatch=True)
             estop_partial = client.post("/emergency-stop", json={"vehicle_id": "ALL"})
             assert estop_partial.status_code == 200
             p_body = estop_partial.json()
-            assert p_body["overall_outcome"] == "PARTIAL_STOPPED"
+            assert p_body["overall_outcome"] == "NONE_CONFIRMED_STOPPED"
             assert p_body["vehicle_outcomes"]["SCOUT01"]["dispatch_succeeded"] is False
-            assert (
-                p_body["vehicle_outcomes"]["HAWK01"]["vehicle_confirmed_stopped"]
-                is True
-            )
-            # Drain partial E-Stop telemetry + safety event frames on ws1
-            _ = ws1.receive_json()
-            _ = ws1.receive_json()
+            assert p_body["vehicle_outcomes"]["SCOUT01"]["vehicle_confirmed_stopped"] is False
 
         # Step 16: Reconnect dashboard WebSocket and verify full resynchronization snapshot
         with client.websocket_connect("/ws/dashboard") as ws2:
@@ -301,10 +280,7 @@ async def test_complete_end_to_end_simulated_mission_workflow(
             assert snap2["type"] == "snapshot"
             assert snap2["payload"]["current_mission"]["id"] == mission_id
             assert snap2["payload"]["current_mission"]["status"] == "COMPLETED"
-            assert (
-                snap2["payload"]["vehicles"]["HAWK01"]["status"]
-                == "EMERGENCY_STOPPED"
-            )
+            assert "SCOUT01" in snap2["payload"]["vehicles"]
 
     await fast_path.shutdown()
     await gateway.close_all()
@@ -355,10 +331,8 @@ async def test_sustained_two_vehicle_telemetry_and_emergency_stop_latency_benchm
 
     async with session_factory() as session:
         await vehicle_svc.connect_vehicle(session, "SCOUT01")
-        await vehicle_svc.connect_vehicle(session, "HAWK01")
 
     simulator.scout.set_target_position(15.0, 10.0)
-    simulator.hawk.set_target_position(12.0, 8.0, alt=2.5)
 
     # Register an in-memory WebSocket subscriber to measure telemetry ingest -> WS client delivery
     received_frames: list[dict[str, Any]] = []
@@ -414,7 +388,7 @@ async def test_sustained_two_vehicle_telemetry_and_emergency_stop_latency_benchm
     )
 
     # Verify performance targets (< 500ms telemetry pipeline, < 100ms simulated E-Stop fast path)
-    assert len(received_frames) >= 51  # 1 initial snapshot + 50 telemetry broadcasts
+    assert len(received_frames) >= 26  # 1 initial snapshot + 25 telemetry broadcasts
     assert telemetry_median < 50.0
     assert telemetry_max < 500.0
     assert estop_dispatch_median < 10.0

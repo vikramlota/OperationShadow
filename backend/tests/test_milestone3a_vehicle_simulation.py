@@ -88,7 +88,7 @@ async def test_vehicle_adapter_protocol_and_real_hardware_lockout(
 
 
 async def test_mock_vehicles_deterministic_movement_and_battery_drain() -> None:
-    """Verify SCOUT01 and HAWK01 configurable start positions, step movement, and battery levels."""
+    """Verify SCOUT01 configurable start position, step movement, and battery levels."""
     clock = ManualClock(datetime(2026, 10, 28, 12, 0, 0, tzinfo=timezone.utc))
     scout_cfg = MockVehicleConfig(
         vehicle_id="SCOUT01",
@@ -100,27 +100,14 @@ async def test_mock_vehicles_deterministic_movement_and_battery_drain() -> None:
         battery_drain_per_tick=0.5,
         default_step_distance=1.0,
     )
-    hawk_cfg = MockVehicleConfig(
-        vehicle_id="HAWK01",
-        vehicle_type="aerial",
-        initial_x=5.0,
-        initial_y=5.0,
-        initial_alt=2.0,
-        initial_battery=90.0,
-        battery_drain_per_tick=1.0,
-        default_step_distance=1.0,
-    )
-    fleet = MockFleetSimulator(clock=clock, scout_config=scout_cfg, hawk_config=hawk_cfg)
+    fleet = MockFleetSimulator(clock=clock, scout_config=scout_cfg)
     await fleet.start_all()
 
     scout_state = fleet.scout.get_state()
-    hawk_state = fleet.hawk.get_state()
     assert scout_state.position_x == 1.0
     assert scout_state.position_y == 2.0
     assert scout_state.position_alt == 0.0
     assert scout_state.battery == 95.0
-    assert hawk_state.position_alt == 2.0
-    assert hawk_state.battery == 90.0
 
     # Ground vehicle SCOUT01 must reject non-zero altitude
     with pytest.raises(ValueError, match="Ground vehicle SCOUT01"):
@@ -128,19 +115,14 @@ async def test_mock_vehicles_deterministic_movement_and_battery_drain() -> None:
     with pytest.raises(ValueError, match="Ground vehicle SCOUT01"):
         fleet.scout.move_by(dalt=0.5)
 
-    # Set valid targets: SCOUT01 moves 2.0m along X; HAWK01 moves 1.0m along Y and +1.0m alt
+    # Set valid target: SCOUT01 moves 2.0m along X
     fleet.scout.set_target_position(3.0, 2.0)
-    fleet.hawk.set_target_position(5.0, 6.0, alt=3.0)
 
     clock.advance(milliseconds=250)
     tick1 = await fleet.step_all()
     assert tick1["SCOUT01"] is not None
     assert tick1["SCOUT01"].position_x == pytest.approx(2.0)
     assert tick1["SCOUT01"].battery == pytest.approx(94.5)
-    assert tick1["HAWK01"] is not None
-    assert tick1["HAWK01"].position_y == pytest.approx(6.0)
-    assert tick1["HAWK01"].position_alt == pytest.approx(3.0)
-    assert tick1["HAWK01"].battery == pytest.approx(89.0)
 
     clock.advance(milliseconds=250)
     tick2 = await fleet.step_all()
@@ -173,36 +155,22 @@ async def test_heartbeat_timeout_unknown_recovery_and_stale_telemetry_rejection(
         persist_every_n_heartbeats=3,
     )
 
-    # 1. Connect both vehicles at t = 0ms
+    # 1. Connect SCOUT01 at t = 0ms
     scout_read = await service.connect_vehicle(db_session, "SCOUT01")
-    hawk_read = await service.connect_vehicle(db_session, "HAWK01")
     assert scout_read.connection.value == "CONNECTED"
-    assert hawk_read.connection.value == "CONNECTED"
 
     # 2. Advance 400ms (within 1000ms timeout) and emit healthy heartbeats
     clock.advance(milliseconds=400)
     telem_frames = await simulator.step_all()
     assert telem_frames["SCOUT01"] is not None
-    assert telem_frames["HAWK01"] is not None
 
     res_scout = await service.ingest_telemetry(db_session, telem_frames["SCOUT01"])
-    res_hawk = await service.ingest_telemetry(db_session, telem_frames["HAWK01"])
     assert res_scout.accepted is True
-    assert res_hawk.accepted is True
     assert await service.evaluate_heartbeats(db_session) == []
 
     # 3. Suppress SCOUT01 heartbeats and advance clock by 1100ms (> 1000ms threshold)
     simulator.scout.configure_faults(suppress_heartbeats=True)
-    clock.advance(milliseconds=600)
-    # HAWK01 sends a heartbeat at t = 1000ms; SCOUT01 does not
-    hawk_beat = await simulator.hawk.step()
-    assert hawk_beat is not None
-    await service.ingest_telemetry(db_session, hawk_beat, force_persist=True)
-
-    clock.advance(milliseconds=500)  # Now t = 1500ms; SCOUT01 last_heartbeat was at t = 400ms (age = 1100ms)
-    hawk_beat_2 = await simulator.hawk.step()
-    assert hawk_beat_2 is not None
-    await service.ingest_telemetry(db_session, hawk_beat_2, force_persist=True)
+    clock.advance(milliseconds=1100)
 
     timed_out = await service.evaluate_heartbeats(db_session)
     assert timed_out == ["SCOUT01"]
@@ -260,11 +228,11 @@ async def test_heartbeat_timeout_unknown_recovery_and_stale_telemetry_rejection(
     assert recovery_ingest.connection == "CONNECTED"
 
     # 6. Explicit disconnect and reconnect
-    disconnected = await service.disconnect_vehicle(db_session, "HAWK01")
+    disconnected = await service.disconnect_vehicle(db_session, "SCOUT01")
     assert disconnected.connection.value == "DISCONNECTED"
-    assert await simulator.hawk.step() is None
+    assert await simulator.scout.step() is None
 
-    reconnected = await service.reconnect_vehicle(db_session, "HAWK01")
+    reconnected = await service.reconnect_vehicle(db_session, "SCOUT01")
     assert reconnected.connection.value == "CONNECTED"
 
 
@@ -283,7 +251,6 @@ async def test_task_transitions_observations_commands_and_fault_injection(
     service = VehicleService(agent=agent, clock=clock, simulator=simulator)
 
     await service.connect_vehicle(db_session, "SCOUT01")
-    await service.connect_vehicle(db_session, "HAWK01")
 
     # Task state transitions on SCOUT01
     state_assigned = simulator.scout.transition_task_state("T100", "ASSIGNED")
@@ -306,7 +273,7 @@ async def test_task_transitions_observations_commands_and_fault_injection(
     db_session.add(mission)
     await db_session.commit()
 
-    obs_payload = await simulator.hawk.emit_observation(
+    obs_payload = await simulator.scout.emit_observation(
         observation_id="OBS_SIM_01",
         mission_id="M_SIM_01",
         obs_type="thermal_hotspot",
@@ -361,15 +328,15 @@ async def test_task_transitions_observations_commands_and_fault_injection(
     assert db_scout.status == "EMERGENCY_STOPPED"
 
     # Fault injection: disconnect on command returns FAILED
-    simulator.hawk.configure_faults(disconnect_on_command=True)
-    hawk_cmd = VehicleCommandEnvelopeStub(
-        command_id="CMD_HAWK_01",
-        vehicle_id="HAWK01",
-        command_type="HOVER",
+    simulator.scout.configure_faults(disconnect_on_command=True)
+    scout_fail_cmd = VehicleCommandEnvelopeStub(
+        command_id="CMD_SCOUT_FAIL",
+        vehicle_id="SCOUT01",
+        command_type="GOTO_WAYPOINT",
     )
-    ack_failed = await service.dispatch_command(db_session, hawk_cmd)
+    ack_failed = await service.dispatch_command(db_session, scout_fail_cmd)
     assert ack_failed.status == "FAILED"
-    assert simulator.hawk.get_connection_state() == "DISCONNECTED"
+    assert simulator.scout.get_connection_state() == "DISCONNECTED"
 
     # Reject arbitrary free-form text in VehicleCommandEnvelopeStub (§5.1)
     with pytest.raises(ValueError, match="arbitrary free-form text is prohibited"):

@@ -1,7 +1,7 @@
 from typing import Tuple, List
 from ultron.schemas.mission import MissionPlan, VehicleID
 from ultron.schemas.world import WorldModel
-from ultron.safety.constraints import HAWK_ALLOWED_ACTIONS
+from ultron.safety.constraints import SCOUT_ALLOWED_ACTIONS
 
 
 class SafetyViolation(Exception):
@@ -36,14 +36,16 @@ def validate_plan(plan: MissionPlan, world: WorldModel) -> Tuple[bool, List[str]
             )
         seen_task_types.add(task_signature)
 
-        # 2. Vehicle/Action Compatibility Check
-        if task.vehicle == VehicleID.HAWK:
-            allowed_hawk_values = [action.value for action in HAWK_ALLOWED_ACTIONS]
-            if task.type.upper() not in allowed_hawk_values:
-                errors.append(
-                    f"Action Compatibility: {task.type} is strictly forbidden for HAWK01. "
-                    f"Must be one of: {allowed_hawk_values}"
-                )
+        # 2. Vehicle/Action Compatibility Check (Single-vehicle SCOUT01 deployment)
+        if task.vehicle != VehicleID.SCOUT and str(task.vehicle) != "SCOUT01":
+            errors.append(
+                f"Vehicle Compatibility: Vehicle '{task.vehicle}' is not present. "
+                "Only SCOUT01 is active in this deployment."
+            )
+        elif task.type.upper() not in SCOUT_ALLOWED_ACTIONS:
+            errors.append(
+                f"Action Compatibility: Task type '{task.type}' is not a permitted action for SCOUT01."
+            )
 
         # 3. Reference Grounding Check
         if task.area:

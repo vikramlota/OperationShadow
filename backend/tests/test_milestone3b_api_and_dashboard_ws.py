@@ -137,8 +137,8 @@ async def test_mission_lifecycle_replay_ordering_events_and_map(
         assert detail["id"] == "M001"
         assert detail["objective"] == "Locate thermal source in Sector Bravo"
         assert detail["status"] == "ACTIVE"
-        assert len(detail["tasks"]) == 2
-        assert {t["vehicle_id"] for t in detail["tasks"]} == {"SCOUT01", "HAWK01"}
+        assert len(detail["tasks"]) == 1
+        assert {t["vehicle_id"] for t in detail["tasks"]} == {"SCOUT01"}
 
         # 4. Unknown mission returns 404
         not_found = await client.get("/mission/M999")
@@ -163,8 +163,8 @@ async def test_mission_lifecycle_replay_ordering_events_and_map(
                 session,
                 mission_id="M001",
                 trigger="Obstacle in corridor",
-                rationale="[ULTRON_STUB] Holding SCOUT01, continuing HAWK01 scan.",
-                resulting_task_ids=["M001-T02"],
+                rationale="[ULTRON_STUB] Holding SCOUT01, continuing scan.",
+                resulting_task_ids=["M001-T01"],
                 trace_id="M001-RT02",
                 timestamp=base_time + timedelta(seconds=6),
             )
@@ -288,13 +288,12 @@ async def test_vehicle_endpoints_status_sensors_observations_commands_and_simula
         async with session_factory() as session:
             await vehicle_svc.reconnect_vehicle(session, "SCOUT01")
 
-        # 5. Create mission & record observation for HAWK01, then query GET /vehicle/HAWK01/observations
+        # 5. Create mission & record observation for SCOUT01, then query GET /vehicle/SCOUT01/observations
         m_res = await client.post("/mission", json={"objective": "Observation test"})
         mission_id = m_res.json()["mission_id"]
 
         async with session_factory() as session:
-            await vehicle_svc.connect_vehicle(session, "HAWK01")
-            obs_stub = await simulator.hawk.emit_observation(
+            obs_stub = await simulator.scout.emit_observation(
                 observation_id="OBS_V_01",
                 mission_id=mission_id,
                 obs_type="target_marker",
@@ -306,7 +305,7 @@ async def test_vehicle_endpoints_status_sensors_observations_commands_and_simula
             await vehicle_svc.record_observation(session, obs_stub)
 
         obs_res = await client.get(
-            "/vehicle/HAWK01/observations",
+            "/vehicle/SCOUT01/observations",
             params={"mission_id": mission_id},
         )
         assert obs_res.status_code == 200
@@ -407,7 +406,7 @@ async def test_dashboard_ws_snapshot_multi_client_broadcast_and_telemetry(
             assert snap1["protocol_version"] == "1.0"
             assert snap1["payload"]["current_mission"]["id"] == "M001"
             assert "SCOUT01" in snap1["payload"]["vehicles"]
-            assert "HAWK01" in snap1["payload"]["vehicles"]
+            assert "HAWK01" not in snap1["payload"]["vehicles"]
             assert len(snap1["payload"]["recent_events"]) >= 1
             assert len(snap1["payload"]["recent_reasoning_traces"]) >= 1
 
@@ -417,7 +416,7 @@ async def test_dashboard_ws_snapshot_multi_client_broadcast_and_telemetry(
 
             # Trigger a mock vehicle telemetry update via REST simulate endpoint
             sim_resp = sync_client.post(
-                "/vehicle/HAWK01/simulate",
+                "/vehicle/SCOUT01/simulate",
                 json={"enabled": True},
             )
             assert sim_resp.status_code == 200
@@ -425,9 +424,9 @@ async def test_dashboard_ws_snapshot_multi_client_broadcast_and_telemetry(
             push1 = ws1.receive_json()
             push2 = ws2.receive_json()
             assert push1["type"] == "telemetry"
-            assert push1["payload"]["vehicle_id"] == "HAWK01"
+            assert push1["payload"]["vehicle_id"] == "SCOUT01"
             assert push2["type"] == "telemetry"
-            assert push2["payload"]["vehicle_id"] == "HAWK01"
+            assert push2["payload"]["vehicle_id"] == "SCOUT01"
 
         # After exiting context managers, disconnected clients are cleaned up
         await asyncio.sleep(0.05)
