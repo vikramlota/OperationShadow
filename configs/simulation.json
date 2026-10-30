@@ -1,0 +1,19 @@
+{
+  "tick_interval_sec": 1.0,
+  "hazard_trigger": {
+    "elapsed_sec": 15.0,
+    "source_vehicle": "HAWK01",
+    "event": "possible_hazard",
+    "location": { "x": 5.1, "y": 3.0 },
+    "confidence": 0.89,
+    "visual_evidence": "smoke_like_pattern"
+  },
+  "target_trigger": {
+    "elapsed_sec": 45.0,
+    "source_vehicle": "SCOUT01",
+    "event": "target_detected",
+    "location": { "x": 6.0, "y": 4.2 },
+    "confidence": 0.92,
+    "visual_evidence": "red_package"
+  }
+}

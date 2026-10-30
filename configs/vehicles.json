@@ -1,0 +1,28 @@
+{
+  "vehicles": {
+    "SCOUT01": {
+      "type": "ground",
+      "hardware_role": "Raspberry Pi + ESP32 Drivetrain",
+      "default_mode": "simulated",
+      "heartbeat_interval_ms": 250,
+      "heartbeat_timeout_ms": 1500,
+      "camera_port": 8081,
+      "allowed_actions": [
+        "EXPLORE", "NAVIGATE", "SCAN", "INSPECT", "FOLLOW",
+        "RETURN_HOME", "PICK", "DROP", "STOP", "REPORT"
+      ]
+    },
+    "HAWK01": {
+      "type": "aerial",
+      "hardware_role": "Flight Controller + Companion Link",
+      "default_mode": "simulated",
+      "heartbeat_interval_ms": 250,
+      "heartbeat_timeout_ms": 1500,
+      "camera_port": 8082,
+      "allowed_actions": [
+        "TAKEOFF", "PATROL", "HOVER_SCAN", "RETURN_HOME",
+        "LAND", "STOP", "REPORT"
+      ]
+    }
+  }
+}

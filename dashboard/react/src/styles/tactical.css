@@ -1,0 +1,435 @@
+/* Operation Shadow — Military Tactical Command-and-Control Design System
+ * Implements docs/ui-design-spec.md and AGENTS.md §3.
+ */
+
+:root {
+  --bg-canvas: #0a0d0c;
+  --bg-panel: #111614;
+  --bg-panel-header: #171e1b;
+  --bg-recessed: #0d110f;
+  --border-subtle: #26302b;
+  --border-tactical: #4a5d3f;
+  --grid-line: #1a221e;
+
+  --text-primary: #e6e8e1;
+  --text-secondary: #9ca59b;
+  --text-muted: #636e64;
+
+  --accent-olive: #4a5d3f;
+  --accent-military: #5c744d;
+  --accent-sage: #8aa37b;
+  --marker-hawk: #7a9a95;
+
+  --status-warning: #d98a2b;
+  --status-critical: #c93535;
+  --status-critical-bright: #e03e3e;
+
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", "Menlo", "Consolas", monospace;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  min-height: 100vh;
+  background-color: var(--bg-canvas);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+}
+
+.c2-shell {
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  gap: 6px;
+  padding: 6px;
+  min-height: 100vh;
+  background-color: var(--bg-canvas);
+}
+
+/* Global Operations Bar */
+.c2-topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 48px;
+  padding: 6px 10px;
+  background-color: var(--bg-panel-header);
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--accent-olive);
+  border-radius: 2px;
+}
+
+.c2-topbar-left,
+.c2-topbar-center,
+.c2-topbar-right {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.c2-brand-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-primary);
+}
+
+.c2-brand-subtitle {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent-sage);
+}
+
+/* Degraded / Warning Global Banner */
+.c2-global-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 10px;
+  background-color: #1d160b;
+  border: 1px solid var(--status-warning);
+  border-left: 3px solid var(--status-warning);
+  border-radius: 2px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* 3-Column Tactical Grid */
+.c2-workstation-grid {
+  display: grid;
+  grid-template-columns: 310px minmax(420px, 1fr) 360px;
+  gap: 6px;
+  align-items: start;
+}
+
+@media (max-width: 1200px) {
+  .c2-workstation-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.c2-column {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Operational Panel */
+.c2-panel {
+  background-color: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: 2px;
+  display: flex;
+  flex-direction: column;
+}
+
+.c2-panel-selected {
+  border-color: var(--border-tactical);
+}
+
+.c2-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+  padding: 4px 8px;
+  background-color: var(--bg-panel-header);
+  border-bottom: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--accent-olive);
+}
+
+.c2-panel-title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-primary);
+}
+
+.c2-panel-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.c2-panel-body {
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Badges & Status Chips */
+.c2-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 2px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid var(--border-subtle);
+  background-color: var(--bg-recessed);
+  color: var(--text-secondary);
+}
+
+.c2-badge-nominal {
+  border-color: var(--accent-military);
+  background-color: #162014;
+  color: var(--accent-sage);
+}
+
+.c2-badge-warning {
+  border-color: var(--status-warning);
+  background-color: #24190a;
+  color: #f3b35f;
+}
+
+.c2-badge-critical {
+  border-color: var(--status-critical-bright);
+  background-color: #291010;
+  color: #ff9494;
+}
+
+.c2-badge-muted {
+  border-color: var(--border-subtle);
+  background-color: var(--bg-recessed);
+  color: var(--text-muted);
+}
+
+/* Monospace Telemetry Grid */
+.c2-mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.c2-kv-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 8px;
+}
+
+.c2-kv-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 3px 6px;
+  background-color: var(--bg-recessed);
+  border: 1px solid var(--border-subtle);
+  border-radius: 2px;
+}
+
+.c2-kv-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+}
+
+.c2-kv-value {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+/* Segmented Battery Bar */
+.c2-battery-track {
+  width: 100%;
+  height: 8px;
+  background-color: var(--bg-recessed);
+  border: 1px solid var(--border-subtle);
+  border-radius: 1px;
+  overflow: hidden;
+}
+
+.c2-battery-fill {
+  height: 100%;
+  transition: width 120ms linear;
+}
+
+/* Buttons & Inputs */
+.c2-input,
+.c2-select {
+  width: 100%;
+  padding: 5px 8px;
+  background-color: var(--bg-recessed);
+  border: 1px solid var(--border-subtle);
+  border-radius: 2px;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+}
+
+.c2-input:focus-visible,
+.c2-select:focus-visible,
+.c2-btn:focus-visible,
+.c2-estop-btn:focus-visible {
+  outline: 2px solid var(--accent-sage);
+  outline-offset: 1px;
+}
+
+.c2-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 5px 10px;
+  background-color: var(--accent-olive);
+  border: 1px solid var(--accent-military);
+  border-radius: 2px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+}
+
+.c2-btn:hover:not(:disabled) {
+  background-color: var(--accent-military);
+}
+
+.c2-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.c2-btn-secondary {
+  background-color: var(--bg-recessed);
+  border-color: var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+.c2-btn-secondary:hover:not(:disabled) {
+  border-color: var(--accent-military);
+  color: var(--text-primary);
+}
+
+.c2-btn-active {
+  background-color: var(--accent-olive);
+  border-color: var(--accent-sage);
+  color: var(--text-primary);
+}
+
+/* Emergency Stop Control */
+.c2-estop-container {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
+  background-color: #1c0c0c;
+  border: 1px solid var(--status-critical-bright);
+  border-radius: 2px;
+}
+
+.c2-estop-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.c2-estop-btn {
+  padding: 6px 12px;
+  background-color: var(--status-critical);
+  border: 1px solid #ff6b6b;
+  border-radius: 2px;
+  color: #ffffff;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+
+.c2-estop-btn:hover:not(:disabled) {
+  background-color: var(--status-critical-bright);
+}
+
+.c2-estop-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Scrollable Log Viewports */
+.c2-log-viewport {
+  max-height: 200px;
+  overflow-y: auto;
+  background-color: var(--bg-recessed);
+  border: 1px solid var(--border-subtle);
+  border-radius: 2px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.c2-log-entry {
+  padding: 4px 6px;
+  border-left: 2px solid var(--accent-military);
+  background-color: var(--bg-panel);
+  font-size: 12px;
+}
+
+.c2-log-entry-warning {
+  border-left-color: var(--status-warning);
+}
+
+.c2-log-entry-critical {
+  border-left-color: var(--status-critical-bright);
+}
+
+.c2-alert-box {
+  padding: 6px 8px;
+  border-radius: 2px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.c2-alert-error {
+  background-color: #291010;
+  border: 1px solid var(--status-critical-bright);
+  color: #ffb3b3;
+}
+
+.c2-alert-warning {
+  background-color: #24190a;
+  border: 1px solid var(--status-warning);
+  color: #f3b35f;
+}
+
+.c2-alert-info {
+  background-color: #141d12;
+  border: 1px solid var(--accent-military);
+  color: var(--accent-sage);
+}

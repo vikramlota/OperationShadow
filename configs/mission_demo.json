@@ -1,0 +1,28 @@
+{
+  "mission_id": "M001",
+  "objective": "inspect_building",
+  "description": "Rehearsed hackathon building inspection scenario (TRD §6, §31)",
+  "tasks": [
+    {
+      "id": "T001",
+      "vehicle": "HAWK01",
+      "type": "aerial_scan",
+      "area": "zone_2",
+      "priority": 1
+    },
+    {
+      "id": "T002",
+      "vehicle": "SCOUT01",
+      "type": "explore",
+      "area": "sector_A",
+      "priority": 1
+    },
+    {
+      "id": "T003",
+      "vehicle": "SCOUT01",
+      "type": "find_target",
+      "target": "red_package",
+      "priority": 2
+    }
+  ]
+}
