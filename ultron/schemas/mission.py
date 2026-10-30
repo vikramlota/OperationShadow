@@ -17,14 +17,14 @@ class MissionStatus(str, Enum):
 
 
 class TaskPriority(int, Enum):
-    LOW = 3
-    MEDIUM = 2
     HIGH = 1
+    MEDIUM = 2
+    LOW = 3
 
 
 class Task(BaseModel):
-    id: str = Field(description="Unique identifier for the task")
-    vehicle: VehicleID = Field(description="Designated vehicle executing this task")
+    id: str = Field(description="Unique identifier for the task, e.g., 'T001'")
+    vehicle: VehicleID = Field(description="Designated vehicle executing this task: SCOUT01 or HAWK01")
     type: str = Field(
         description="High-level task action, e.g., 'explore', 'aerial_scan', 'find_target'"
     )
@@ -34,8 +34,8 @@ class Task(BaseModel):
     target: Optional[str] = Field(
         default=None, description="Specific entity or item label, e.g., 'red_package'"
     )
-    priority: TaskPriority = Field(
-        default=TaskPriority.MEDIUM, description="Task urgency rating (1=High, 2=Med, 3=Low)"
+    priority: int = Field(
+        default=2, ge=1, le=3, description="Task urgency rating (1=High, 2=Medium, 3=Low)"
     )
 
 

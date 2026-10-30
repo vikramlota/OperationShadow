@@ -73,11 +73,12 @@ class VehicleStatusEnum(StrEnum):
 
 
 class MissionStatusEnum(StrEnum):
-    """Provisional mission lifecycle states (see docs/assumptions.md)."""
+    """Mission lifecycle states."""
 
     PENDING = "PENDING"
     PLANNING = "PLANNING"
     ACTIVE = "ACTIVE"
+    IN_PROGRESS = "IN_PROGRESS"
     COMPLETED = "COMPLETED"
     ABORTED = "ABORTED"
     FAILED = "FAILED"

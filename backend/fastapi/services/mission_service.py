@@ -31,7 +31,7 @@ from websocket.dashboard_gateway import DashboardGateway, dashboard_gateway
 
 
 class MissionService:
-    """Adapter bridging the FastAPI service layer to ULTRON, SQLite, and DashboardGateway."""
+    """Adapter bridging the FastAPI service layer to ULTRON LangGraph, SQLite, and DashboardGateway."""
 
     def __init__(
         self,
@@ -40,7 +40,14 @@ class MissionService:
         gateway: DashboardGateway | None = None,
         events: EventService | None = None,
     ) -> None:
-        self._agent: UltronAgentPort = agent if agent is not None else StubUltronAgent()
+        if agent is not None:
+            self._agent = agent
+        else:
+            try:
+                from services.ultron_agent_adapter import UltronLangGraphAgent
+                self._agent = UltronLangGraphAgent()
+            except Exception:
+                self._agent = StubUltronAgent()
         self._gateway: DashboardGateway = gateway or dashboard_gateway
         self._events: EventService = events or event_service
 

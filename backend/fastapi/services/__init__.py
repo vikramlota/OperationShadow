@@ -2,6 +2,7 @@
 
 from services.event_service import EventService, event_service
 from services.mission_service import MissionService, mission_service
+from services.ultron_agent_adapter import UltronLangGraphAgent
 from services.vehicle_service import (
     TelemetryIngestionResult,
     VehicleService,
@@ -13,6 +14,7 @@ __all__ = [
     "EventService",
     "MissionService",
     "TelemetryIngestionResult",
+    "UltronLangGraphAgent",
     "VehicleService",
     "event_service",
     "mission_service",

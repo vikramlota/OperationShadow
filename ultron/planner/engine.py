@@ -1,9 +1,21 @@
 import os
 from typing import Optional
+from pathlib import Path
 from ultron.schemas.mission import MissionPlan
 from ultron.schemas.world import WorldModel
 from ultron.planner.prompts import SYSTEM_PROMPT
 from ultron.planner.cache import get_fallback_plan
+
+# Automatically load .env if available
+try:
+    import dotenv
+    root_dir = Path(__file__).resolve().parent.parent.parent
+    for env_path in [root_dir / ".env", Path(".env")]:
+        if env_path.is_file():
+            dotenv.load_dotenv(env_path)
+            break
+except ImportError:
+    pass
 
 
 def invoke_gemini_planner(
@@ -28,12 +40,14 @@ def invoke_gemini_planner(
     if not api_key:
         return get_fallback_plan(world.mission.id)
 
+    model_name = os.getenv("SHADOW_LLM_MODEL", "gemini-3.8-flash")
+
     try:
         from google import genai
         client = genai.Client(api_key=api_key)
 
         response = client.models.generate_content(
-            model='gemini-2.0-flash',
+            model=model_name,
             contents=user_prompt,
             config={
                 'system_instruction': SYSTEM_PROMPT,
@@ -47,7 +61,7 @@ def invoke_gemini_planner(
         return get_fallback_plan(world.mission.id)
 
     except Exception as e:
-        print(f"LLM Call Failed or Timed Out: {e}")
+        print(f"LLM Call Failed or Timed Out ({model_name}): {e}")
         if not trigger_rationale and not repair_prompt:
             return get_fallback_plan(world.mission.id)
         raise RuntimeError("LLM Replanning failed. Graph should route to DEGRADED.") from e

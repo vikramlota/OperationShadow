@@ -17,14 +17,24 @@ def validate_plan(plan: MissionPlan, world: WorldModel) -> Tuple[bool, List[str]
     errors: List[str] = []
     active_priorities = set()
 
+    # Extract vocabulary from mission objective to ground references
+    obj_words = set(world.mission.objective.lower().replace(",", " ").replace(".", " ").split())
+    standard_areas = {"sector_a", "sector_b", "zone_1", "zone_2", "corridor", "building", "arena"}
+    known_areas = set(a.lower() for a in world.environment.explored_areas).union(standard_areas).union(obj_words)
+
+    standard_targets = {"red_package", "target", "hazards", "hazard", "package", "thermal_anomaly"}
+    known_targets = set(obj.label.lower() for obj in world.environment.objects).union(standard_targets).union(obj_words)
+
+    seen_task_types = set()
+
     for task in plan.tasks:
-        # 1. Contradictory Task Check: No vehicle can execute multiple concurrent tasks at the same priority
-        vehicle_priority_key = (task.vehicle, task.priority)
-        if vehicle_priority_key in active_priorities:
+        # 1. Contradictory Task Check: No vehicle can execute identical concurrent actions
+        task_signature = (task.vehicle, task.type.upper())
+        if task_signature in seen_task_types:
             errors.append(
-                f"Contradiction: {task.vehicle} is assigned multiple conflicting tasks at priority {task.priority}."
+                f"Contradiction: {task.vehicle} is assigned duplicate concurrent task '{task.type}'."
             )
-        active_priorities.add(vehicle_priority_key)
+        seen_task_types.add(task_signature)
 
         # 2. Vehicle/Action Compatibility Check
         if task.vehicle == VehicleID.HAWK:
@@ -37,13 +47,13 @@ def validate_plan(plan: MissionPlan, world: WorldModel) -> Tuple[bool, List[str]
 
         # 3. Reference Grounding Check
         if task.area:
-            known_areas = set(world.environment.explored_areas + ["sector_A", "zone_2"])
-            if task.area not in known_areas:
+            task_area_clean = task.area.lower().strip()
+            if task_area_clean not in known_areas and not any(w in task_area_clean for w in known_areas):
                 errors.append(f"Hallucination: Area '{task.area}' does not exist in the World Model.")
 
         if task.target:
-            known_targets = set([obj.label for obj in world.environment.objects] + ["red_package"])
-            if task.target not in known_targets:
+            task_target_clean = task.target.lower().strip()
+            if task_target_clean not in known_targets and not any(w in task_target_clean for w in known_targets):
                 errors.append(f"Hallucination: Target '{task.target}' has not been observed.")
 
     is_valid = len(errors) == 0

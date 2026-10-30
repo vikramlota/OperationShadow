@@ -11,8 +11,9 @@ def check_replanning_triggers(world: WorldModel) -> Tuple[bool, Optional[str]]:
     unhandled_hazards = [h for h in world.environment.hazards if not getattr(h, "handled", False)]
     if unhandled_hazards:
         latest_hazard = unhandled_hazards[-1]
+        source_id = getattr(latest_hazard.source_vehicle, "value", str(latest_hazard.source_vehicle))
         return True, (
-            f"Hazard '{latest_hazard.type}' reported by {latest_hazard.source_vehicle} "
+            f"Hazard '{latest_hazard.type}' reported by {source_id} "
             f"at ({latest_hazard.location.x}, {latest_hazard.location.y}) "
             f"(confidence {latest_hazard.confidence:.2f}). Rerouting active routes."
         )
@@ -20,8 +21,9 @@ def check_replanning_triggers(world: WorldModel) -> Tuple[bool, Optional[str]]:
     # 2. Target Discovered
     for obj in world.environment.objects:
         if not getattr(obj, "handled", False) and (obj.label == world.mission.objective or obj.label == "red_package"):
+            source_id = getattr(obj.source_vehicle, "value", str(obj.source_vehicle))
             return True, (
-                f"Target '{obj.label}' located by {obj.source_vehicle} "
+                f"Target '{obj.label}' located by {source_id} "
                 f"at ({obj.location.x}, {obj.location.y}). Initiating mission completion sequence."
             )
 

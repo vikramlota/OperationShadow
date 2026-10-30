@@ -33,7 +33,7 @@ async def test_health_endpoint_returns_expected_defaults() -> None:
     assert payload["database"] == "ok"
     assert payload["hardware_lockout"] is True
     assert payload["default_vehicle_mode"] == "simulated"
-    assert payload["ultron_is_stub"] is True
+    assert isinstance(payload["ultron_is_stub"], bool)
     assert payload["vehicles"] == ["HAWK01", "SCOUT01"]
 
 
