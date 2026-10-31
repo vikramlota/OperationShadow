@@ -7,6 +7,7 @@ import { FloorMap } from "./components/FloorMap";
 import { MissionPanel } from "./components/MissionPanel";
 import { MissionReplayScrubber } from "./components/MissionReplayScrubber";
 import { ReasoningTracePanel } from "./components/ReasoningTracePanel";
+import { ScoutKeyboardControl } from "./components/ScoutKeyboardControl";
 import { SimulatedModeToggle } from "./components/SimulatedModeToggle";
 import { VehicleStatusCard } from "./components/VehicleStatusCard";
 import { useDashboardSocket } from "./hooks/useDashboardSocket";
@@ -122,6 +123,7 @@ export default function App({
       <aside className="left-rail" aria-label="Command and Controls Rail">
         <MissionPanel />
         <SimulatedModeToggle />
+        <ScoutKeyboardControl />
       </aside>
 
       {/* 3. Center Column: Dominant Tactical Indoor Floor Map */}

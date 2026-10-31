@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from api import emergency, events, map as map_router, mission, vehicle
+from api import emergency, events, map as map_router, mission, scout_control, vehicle
 from core.config import settings
 from core.errors import register_exception_handlers
 from core.logging import configure_logging, get_logger
@@ -27,6 +27,8 @@ from pydantic import BaseModel
 from schemas.entities import FloorPlanConfigResponse
 from services.event_service import EventService, event_service
 from services.mission_service import MissionService, mission_service
+from services.scout_control_simulator import ScoutControlSimulator
+from services.scout_serial_writer import ScoutSerialWriter
 from services.vehicle_service import VehicleService, vehicle_service
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from websocket.dashboard_gateway import DashboardGateway, dashboard_gateway
@@ -83,10 +85,29 @@ def create_app(
         """Initialize SQLite metadata on startup and clean up WS/vehicle/E-Stop tasks on shutdown."""
         configure_logging()
         await init_db(db_engine)
+        await active_scout_control_simulator.start()
         logger.info("Operation Shadow backend initialized.")
+
+        rosbridge = None
+        if settings.rosbridge_enabled:
+            try:
+                from services.rosbridge_client import start_rosbridge
+
+                rosbridge = await start_rosbridge(
+                    mission_service_agent=active_mission_svc.agent
+                )
+                logger.info("ROSBridge client started for read-only SCOUT01 observations.")
+            except Exception:
+                logger.exception("ROSBridge client failed to start.")
+        else:
+            logger.info("ROSBridge client disabled by SHADOW_ROSBRIDGE_ENABLED=false.")
+
         try:
             yield
         finally:
+            await active_scout_control_simulator.shutdown()
+            if rosbridge:
+                await rosbridge.stop()
             await active_estop_fast_path.shutdown()
             await active_veh_gateway.close_all()
             await active_gateway.close_all()
@@ -106,6 +127,16 @@ def create_app(
     application.state.event_service = active_event_svc
     application.state.mission_service = active_mission_svc
     application.state.vehicle_service = active_vehicle_svc
+    scout_serial_writer = ScoutSerialWriter(
+        port=settings.scout_serial_port,
+        baudrate=settings.scout_serial_baudrate,
+        enabled=settings.scout_serial_enabled,
+        hardware_lockout=settings.hardware_lockout,
+        real_mode=settings.default_vehicle_mode == "real",
+        failsafe_verified=settings.scout_serial_failsafe_verified,
+    )
+    active_scout_control_simulator = ScoutControlSimulator(scout_serial_writer)
+    application.state.scout_control_simulator = active_scout_control_simulator
     if floor_plan_config is not None:
         application.state.floor_plan_config = floor_plan_config
 
@@ -136,6 +167,8 @@ def create_app(
     application.include_router(map_router.router)
     application.include_router(map_router.upload_map_router)
     application.include_router(emergency.router)
+    application.include_router(scout_control.router)
+    application.include_router(scout_control.websocket_router)
 
     @application.get("/health", response_model=HealthResponse, tags=["system"])
     async def health_check() -> HealthResponse:
@@ -149,6 +182,20 @@ def create_app(
             ultron_is_stub=active_mission_svc.agent.is_stub_implementation(),
             vehicles=sorted(snapshot.vehicles.keys()),
         )
+
+    @application.get("/scout/status", tags=["scout"])
+    async def scout_status() -> dict[str, str | bool]:
+        """Return SCOUT01 ROSBridge configuration and connection status."""
+        from services.rosbridge_client import get_rosbridge_client
+
+        client = get_rosbridge_client()
+        return {
+            "scout_id": "SCOUT01",
+            "rosbridge_url": "ws://10.241.171.41:9090",
+            "enabled": settings.rosbridge_enabled,
+            "connected": client.connected if client else False,
+            "mode": "read_only" if settings.rosbridge_enabled else "disabled",
+        }
 
     @application.websocket("/ws/dashboard")
     async def dashboard_websocket_endpoint(websocket: WebSocket) -> None:

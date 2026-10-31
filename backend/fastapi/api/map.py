@@ -166,8 +166,10 @@ async def process_map_upload(
     return MapUploadResponse(
         status="success",
         vehicle_id=clean_vid,
+        vehicle=clean_vid,
         saved_files=saved_filenames,
         filenames=saved_filenames,
+        saved=saved_filenames,
     )
 
 

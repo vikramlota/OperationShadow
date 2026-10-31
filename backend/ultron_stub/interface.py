@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Literal, Protocol, runtime_checkable
 
-VehicleId = Literal["SCOUT01"]
+VehicleId = Literal["SCOUT01", "HAWK01"]
 EmergencyStopTarget = Literal["ALL", "SCOUT01"]
 VehicleMode = Literal["simulated", "real"]
 VehicleType = Literal["ground", "aerial"]
@@ -113,6 +113,7 @@ class TelemetryPayloadStub:
     status: str
     timestamp: datetime = field(default_factory=_utc_now)
     sequence: int = 0
+    raw_sensors: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if not (0.0 <= self.battery <= 100.0):

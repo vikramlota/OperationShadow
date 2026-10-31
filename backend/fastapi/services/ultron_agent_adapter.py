@@ -22,12 +22,11 @@ from ultron.schemas.world import (
     WorldModel,
     MissionState,
     ScoutState,
-    HawkState,
     VehicleMode as UltronVehicleMode,
     ConnectionStatus as UltronConnectionStatus,
 )
 from ultron.schemas.mission import MissionStatus as UltronMissionStatus, VehicleID
-from ultron.schemas.commands import Position2D, Position3D
+from ultron.schemas.commands import Position2D
 from ultron.schemas.observations import StructuredObservation
 from ultron.evaluator.updater import update_world_model
 from ultron.state import UltronState

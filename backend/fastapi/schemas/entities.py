@@ -588,5 +588,7 @@ class MapUploadResponse(SchemaBase):
 
     status: str = "success"
     vehicle_id: str
+    vehicle: str | None = None
     saved_files: list[str] = Field(default_factory=list)
     filenames: list[str] = Field(default_factory=list)
+    saved: list[str] = Field(default_factory=list)

@@ -9,8 +9,15 @@ export const API_BASE_URL: string =
 export const WS_DASHBOARD_URL: string =
   import.meta.env.VITE_WS_URL ?? "ws://localhost:8000/ws/dashboard";
 
+export const WS_SCOUT_CONTROL_URL: string =
+  import.meta.env.VITE_WS_CONTROL_URL ?? "ws://localhost:8000/ws/scout/control";
+
 export const DEFAULT_SCOUT_STREAM_URL: string =
-  import.meta.env.VITE_SCOUT01_STREAM_URL ?? "";
+  import.meta.env.VITE_SCOUT01_STREAM_URL ??
+  "http://10.241.171.41:8081/stream.mjpg";
+
+export const ROSBRIDGE_URL: string =
+  import.meta.env.VITE_ROSBRIDGE_URL ?? "ws://10.241.171.41:9090";
 
 export type VehicleId = "SCOUT01";
 export type EmergencyStopTarget = "ALL" | "SCOUT01";
@@ -47,6 +54,29 @@ export interface ApiErrorPayload {
   details?: Array<{ loc?: Array<string | number>; message: string }> | Record<string, unknown>;
 }
 
+export interface ScoutStatusPayload {
+  scout_id: string;
+  rosbridge_url: string;
+  enabled: boolean;
+  connected: boolean;
+  mode: "read_only" | "disabled";
+}
+
+export interface MapUploadResponsePayload {
+  status: string;
+  vehicle_id: string;
+  saved_files: string[];
+}
+
+export interface ScoutControlStatusPayload {
+  mode: "simulation_only";
+  transmitter_connected: false;
+  control_client_connected: boolean;
+  current_command: "W" | "A" | "S" | "D" | "X";
+  last_update: string | null;
+  physical_control_available: false;
+}
+
 export class ApiClientError extends Error {
   public readonly status: number;
   public readonly errorCode: string;
@@ -63,12 +93,13 @@ async function requestJson<TResponse>(
   path: string,
   init?: RequestInit,
 ): Promise<TResponse> {
+  const headers = new Headers(init?.headers);
+  if (!(init?.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
+    headers,
   });
 
   if (!response.ok) {
@@ -289,6 +320,24 @@ export async function fetchHealth(): Promise<HealthCheckPayload> {
   return requestJson<HealthCheckPayload>("/health");
 }
 
+export async function fetchScoutStatus(): Promise<ScoutStatusPayload> {
+  return requestJson<ScoutStatusPayload>("/scout/status");
+}
+
+export async function uploadMapFiles(
+  vehicleId: VehicleId,
+  files: File[],
+): Promise<MapUploadResponsePayload> {
+  const body = new FormData();
+  for (const file of files) {
+    body.append("files", file, file.name);
+  }
+  return requestJson<MapUploadResponsePayload>(
+    `/upload-map/${encodeURIComponent(vehicleId)}`,
+    { method: "POST", body },
+  );
+}
+
 export async function createMission(
   objective: string,
 ): Promise<MissionCreateResponsePayload> {
@@ -319,17 +368,6 @@ export async function completeMission(
 ): Promise<MissionDetailPayload> {
   return requestJson<MissionDetailPayload>(
     `/mission/${encodeURIComponent(missionId)}/complete`,
-    {
-      method: "POST",
-    },
-  );
-}
-
-export async function executeUltronSimulation(
-  missionId: string,
-): Promise<MissionDetailPayload> {
-  return requestJson<MissionDetailPayload>(
-    `/mission/${encodeURIComponent(missionId)}/execute-ultron`,
     {
       method: "POST",
     },

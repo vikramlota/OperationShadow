@@ -11,7 +11,7 @@ from main import create_app
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, AsyncSession
 
 
-def test_upload_map_endpoint_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_upload_map_endpoint_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     app = create_app()
     client = TestClient(app)
@@ -38,7 +38,7 @@ def test_upload_map_endpoint_success(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert (saved_dir / "rtabmap.db").read_bytes() == b"SQLITE_FORMAT_3_DB"
 
 
-def test_upload_map_optional_single_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_upload_map_optional_single_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     app = create_app()
     client = TestClient(app)
@@ -58,7 +58,7 @@ def test_upload_map_optional_single_file(tmp_path: Path, monkeypatch: pytest.Mon
     assert not (saved_dir / "lidar_map.pcd").exists()
 
 
-def test_upload_map_invalid_vehicle_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_upload_map_invalid_vehicle_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     app = create_app()
     client = TestClient(app)

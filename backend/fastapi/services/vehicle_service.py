@@ -21,7 +21,7 @@ import asyncio
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import cast
+from typing import Any, cast
 import uuid
 
 from core.config import Settings, settings
@@ -371,6 +371,7 @@ class VehicleService:
                 "is_simulated": status_resp.mode == VehicleModeEnum.SIMULATED,
                 "vehicle_type": status_resp.vehicle_type.value,
                 "active_task_id": status_resp.active_task_id,
+                **(latest_telem.raw_sensors if latest_telem and latest_telem.raw_sensors else {}),
             },
         )
 

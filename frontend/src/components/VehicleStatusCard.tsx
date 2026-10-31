@@ -1,7 +1,9 @@
 import React, { useState } from "react";
 import {
   fetchVehicleObservations,
+  fetchVehicleSensors,
   fetchVehicleStatus,
+  type VehicleSensorsPayload,
 } from "../api/client";
 import {
   useDashboardStore,
@@ -51,6 +53,8 @@ export function VehicleStatusCard({
   const { state, dispatch } = useDashboardStore();
   const [syncError, setSyncError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+  const [sensorSnapshot, setSensorSnapshot] =
+    useState<VehicleSensorsPayload | null>(null);
 
   const isSelected = state.selectedVehicleId === vehicle.id;
   const assignedTask =
@@ -90,8 +94,9 @@ export function VehicleStatusCard({
     setIsRefreshing(true);
     setSyncError(null);
     try {
-      const [statusPayload, obsPayload] = await Promise.all([
+      const [statusPayload, sensorsPayload, obsPayload] = await Promise.all([
         fetchVehicleStatus(vehicle.id),
+        fetchVehicleSensors(vehicle.id),
         fetchVehicleObservations(
           vehicle.id,
           state.activeMissionId ?? undefined,
@@ -99,6 +104,7 @@ export function VehicleStatusCard({
       ]);
       dispatch({ type: "APPLY_VEHICLE_STATUS", payload: statusPayload });
       dispatch({ type: "SET_OBSERVATIONS", payload: obsPayload });
+      setSensorSnapshot(sensorsPayload);
     } catch (err) {
       setSyncError(
         err instanceof Error ? err.message : "Failed to query vehicle status",
@@ -266,6 +272,26 @@ export function VehicleStatusCard({
           <div className="c2-alert-box c2-alert-error" role="alert">
             {syncError}
           </div>
+        )}
+        {sensorSnapshot && (
+          <details className="data-cell">
+            <summary>
+              SENSOR SNAPSHOT // SEQ {sensorSnapshot.sequence}
+              {sensorSnapshot.is_stale ? " // STALE" : ""}
+            </summary>
+            <pre
+              style={{
+                maxHeight: "90px",
+                overflow: "auto",
+                whiteSpace: "pre-wrap",
+                overflowWrap: "anywhere",
+                fontSize: "9px",
+                color: "var(--text-secondary)",
+              }}
+            >
+              {JSON.stringify(sensorSnapshot.raw_sensors, null, 2)}
+            </pre>
+          </details>
         )}
       </div>
     </article>

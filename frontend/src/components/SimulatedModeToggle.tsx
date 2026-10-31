@@ -1,5 +1,10 @@
 import React, { useState } from "react";
-import { setVehicleSimulatedMode, type VehicleId } from "../api/client";
+import {
+  fetchScoutStatus,
+  setVehicleSimulatedMode,
+  type ScoutStatusPayload,
+  type VehicleId,
+} from "../api/client";
 import { useDashboardStore } from "../state/store";
 
 export function SimulatedModeToggle(): React.JSX.Element {
@@ -7,18 +12,18 @@ export function SimulatedModeToggle(): React.JSX.Element {
   const [busyVehicle, setBusyVehicle] = useState<VehicleId | null>(null);
   const [statusNotice, setStatusNotice] = useState<string | null>(null);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
+  const [scoutStatus, setScoutStatus] = useState<ScoutStatusPayload | null>(null);
+  const [isSyncingScout, setIsSyncingScout] = useState(false);
+  const [scoutError, setScoutError] = useState<string | null>(null);
 
   const vehicleList: VehicleId[] = ["SCOUT01"];
 
-  const handleModeChange = async (
-    vehicleId: VehicleId,
-    enableSimulated: boolean,
-  ): Promise<void> => {
+  const handleEnableSimulatedMode = async (vehicleId: VehicleId): Promise<void> => {
     setBusyVehicle(vehicleId);
     setStatusNotice(null);
     setErrorNotice(null);
     try {
-      const ack = await setVehicleSimulatedMode(vehicleId, enableSimulated);
+      const ack = await setVehicleSimulatedMode(vehicleId, true);
       dispatch({
         type: "SET_VEHICLE_MODE",
         payload: { vehicleId: ack.vehicle_id, mode: ack.mode },
@@ -34,6 +39,20 @@ export function SimulatedModeToggle(): React.JSX.Element {
       );
     } finally {
       setBusyVehicle(null);
+    }
+  };
+
+  const handleSyncScoutStatus = async (): Promise<void> => {
+    setIsSyncingScout(true);
+    setScoutError(null);
+    try {
+      setScoutStatus(await fetchScoutStatus());
+    } catch (err) {
+      setScoutError(
+        err instanceof Error ? err.message : "Failed to fetch SCOUT01 link status",
+      );
+    } finally {
+      setIsSyncingScout(false);
     }
   };
 
@@ -64,6 +83,29 @@ export function SimulatedModeToggle(): React.JSX.Element {
           Physical hardware control is locked until TRD v2.0 &amp; Hardware/IoT
           failsafes are verified.
         </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            style={{ padding: "3px 8px", fontSize: "10px" }}
+            disabled={isSyncingScout}
+            onClick={() => void handleSyncScoutStatus()}
+            aria-label="Sync SCOUT01 ROS status"
+          >
+            {isSyncingScout ? "SYNC..." : "SYNC ROS STATUS"}
+          </button>
+          {scoutStatus && (
+            <span className="panel-meta" role="status">
+              BACKEND ROS: {scoutStatus.mode.toUpperCase()} //
+              {scoutStatus.connected ? " LINKED" : " NOT LINKED"}
+            </span>
+          )}
+        </div>
+        {scoutError && (
+          <div className="c2-alert-box c2-alert-error" role="alert">
+            {scoutError}
+          </div>
+        )}
 
         {vehicleList.map((vid) => {
           const v = state.vehicles[vid];
@@ -97,7 +139,7 @@ export function SimulatedModeToggle(): React.JSX.Element {
                   }`}
                   style={{ padding: "3px 8px", fontSize: "10px" }}
                   disabled={isBusy}
-                  onClick={() => void handleModeChange(vid, true)}
+                  onClick={() => void handleEnableSimulatedMode(vid)}
                   aria-label={`Set ${vid} to Simulated Mode`}
                 >
                   SIMULATED
@@ -108,8 +150,8 @@ export function SimulatedModeToggle(): React.JSX.Element {
                     v.mode === "real" ? "btn-primary" : "btn-secondary"
                   }`}
                   style={{ padding: "3px 8px", fontSize: "10px" }}
-                  disabled={isBusy}
-                  onClick={() => void handleModeChange(vid, false)}
+                  disabled
+                  title="Real hardware mode is unavailable until external specifications and failsafes are verified."
                   aria-label={`Attempt Real Hardware Mode for ${vid}`}
                 >
                   REAL (LOCKED)

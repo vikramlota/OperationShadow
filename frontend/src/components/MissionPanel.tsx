@@ -2,17 +2,18 @@ import React, { useState } from "react";
 import {
   completeMission,
   createMission,
-  executeUltronSimulation,
   fetchMission,
 } from "../api/client";
 import { useDashboardStore } from "../state/store";
+
+const HACKATHON_DEMO_OBJECTIVE =
+  "Simulated SCOUT01: perform one short sweep of Sector Alpha, identify visible obstacles, and report findings.";
 
 export function MissionPanel(): React.JSX.Element {
   const { state, dispatch } = useDashboardStore();
   const [objectiveInput, setObjectiveInput] = useState<string>("");
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [isCompleting, setIsCompleting] = useState<boolean>(false);
-  const [isRunningUltron, setIsRunningUltron] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
@@ -67,28 +68,6 @@ export function MissionPanel(): React.JSX.Element {
     }
   };
 
-  const handleRunUltronPipeline = async (): Promise<void> => {
-    if (!state.activeMissionId) {
-      return;
-    }
-    setErrorMsg(null);
-    setSuccessMsg(null);
-    setIsRunningUltron(true);
-    try {
-      const completed = await executeUltronSimulation(state.activeMissionId);
-      dispatch({ type: "SET_MISSION_DETAIL", payload: completed });
-      setSuccessMsg(
-        `ULTRON pipeline executed for ${completed.id}: hazard replanned, target located, mission COMPLETED.`,
-      );
-    } catch (err) {
-      setErrorMsg(
-        err instanceof Error ? err.message : "ULTRON simulation run failed.",
-      );
-    } finally {
-      setIsRunningUltron(false);
-    }
-  };
-
   return (
     <section className="panel" aria-label="Mission Panel">
       <div className="panel-header">
@@ -109,6 +88,18 @@ export function MissionPanel(): React.JSX.Element {
           >
             MISSION OBJECTIVE
           </label>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            style={{ fontSize: "9px", padding: "3px 7px", marginBottom: "5px" }}
+            onClick={() => {
+              setObjectiveInput(HACKATHON_DEMO_OBJECTIVE);
+              setErrorMsg(null);
+              setSuccessMsg(null);
+            }}
+          >
+            LOAD HACKATHON DEMO TASK
+          </button>
           <div style={{ display: "flex", gap: "4px" }}>
             <input
               id="mission-objective-input"
@@ -159,35 +150,27 @@ export function MissionPanel(): React.JSX.Element {
         </div>
 
         {state.activeMissionId && state.missionStatus === "ACTIVE" && (
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "flex-end",
-              gap: "4px",
-              flexWrap: "wrap",
-            }}
-          >
-            <button
-              type="button"
-              className="btn btn-secondary"
-              style={{ fontSize: "10px", padding: "4px 8px" }}
-              disabled={isRunningUltron || isCompleting}
-              onClick={() => void handleRunUltronPipeline()}
-              aria-label="Run ULTRON Simulation Pipeline"
+          <>
+            <div
+              className="panel-meta"
+              role="note"
+              aria-label="ULTRON planning and safety validation run on dispatch; simulated only"
             >
-              {isRunningUltron ? "RUNNING..." : "RUN ULTRON"}
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              style={{ fontSize: "10px", padding: "4px 8px" }}
-              disabled={isCompleting || isRunningUltron}
-              onClick={() => void handleCompleteMission()}
-              aria-label="Complete Simulated Mission"
-            >
-              {isCompleting ? "COMPLETING..." : "COMPLETE SIMULATED MISSION"}
-            </button>
-          </div>
+              {"ULTRON PLANNING + SAFETY VALIDATION RUN ON DISPATCH // SIMULATED ONLY"}
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{ fontSize: "10px", padding: "4px 8px" }}
+                disabled={isCompleting}
+                onClick={() => void handleCompleteMission()}
+                aria-label="Complete Simulated Mission"
+              >
+                {isCompleting ? "COMPLETING..." : "COMPLETE SIMULATED MISSION"}
+              </button>
+            </div>
+          </>
         )}
 
         {state.activeMissionId && state.missionStatus === "COMPLETED" && (

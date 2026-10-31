@@ -5,6 +5,14 @@ from ultron.schemas.mission import MissionStatus, VehicleID
 from ultron.schemas.commands import Position2D, Position3D
 
 
+def _default_active_tasks() -> Dict[VehicleID, Optional[str]]:
+    return {VehicleID.SCOUT: None}
+
+
+def _default_vehicles() -> Dict[str, Union["ScoutState", "HawkState"]]:
+    return {"SCOUT01": ScoutState()}
+
+
 class ConnectionStatus(str, Enum):
     ONLINE = "ONLINE"
     OFFLINE = "OFFLINE"
@@ -62,7 +70,7 @@ class ObjectEntity(BaseModel):
 class TaskTracker(BaseModel):
     completed: List[str] = Field(default_factory=list)
     active: Dict[VehicleID, Optional[str]] = Field(
-        default_factory=lambda: {VehicleID.SCOUT: None}
+        default_factory=_default_active_tasks
     )
     pending: List[str] = Field(default_factory=list)
 
@@ -84,8 +92,6 @@ class EnvironmentState(BaseModel):
 class WorldModel(BaseModel):
     mission: MissionState
     vehicles: Dict[str, Union[ScoutState, HawkState]] = Field(
-        default_factory=lambda: {
-            "SCOUT01": ScoutState(),
-        }
+        default_factory=_default_vehicles
     )
     environment: EnvironmentState = Field(default_factory=EnvironmentState)

@@ -11,3 +11,13 @@ class UltronState(TypedDict):
     retry_count: int
     trigger_rationale: Optional[str]
     language: str
+
+
+class UltronStateUpdate(TypedDict, total=False):
+    world: WorldModel
+    proposed_plan: Optional[MissionPlan]
+    validation_errors: List[str]
+    repair_prompt: Optional[str]
+    retry_count: int
+    trigger_rationale: Optional[str]
+    language: str

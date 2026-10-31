@@ -1,6 +1,8 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import { LidarScanView } from "./LidarScanView";
 import {
   fetchFloorMap,
+  uploadMapFiles,
   type FloorPlanConfigPayload,
   type VehicleId,
 } from "../api/client";
@@ -123,8 +125,14 @@ export function FloorMap(): React.JSX.Element {
   const [mapError, setMapError] = useState<string | null>(null);
   const [zoomLevel, setZoomLevel] = useState<number>(1.0);
   const [showTrail, setShowTrail] = useState<boolean>(true);
+  const [activeLayer, setActiveLayer] = useState<"floor" | "lidar">("floor");
   const [selectedWaypointId, setSelectedWaypointId] = useState<string | null>(null);
   const [scoutBreadcrumbs, setScoutBreadcrumbs] = useState<Array<{ x: number; y: number }>>([]);
+  const [pendingMapFiles, setPendingMapFiles] = useState<File[]>([]);
+  const [isUploadingMap, setIsUploadingMap] = useState(false);
+  const [mapUploadNotice, setMapUploadNotice] = useState<string | null>(null);
+  const [mapUploadError, setMapUploadError] = useState<string | null>(null);
+  const mapFileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -173,14 +181,48 @@ export function FloorMap(): React.JSX.Element {
 
   const selectedWaypoint = activeMap.waypoints.find((w) => w.id === selectedWaypointId);
 
+  const handleArchiveMapFiles = async (): Promise<void> => {
+    if (pendingMapFiles.length === 0 || isUploadingMap) return;
+    const fileNames = pendingMapFiles.map((file) => file.name).join(", ");
+    if (
+      !window.confirm(
+        `Archive ${fileNames} for SCOUT01? This may replace saved files with the same canonical names and does not change the live dashboard map.`,
+      )
+    ) {
+      return;
+    }
+
+    setIsUploadingMap(true);
+    setMapUploadError(null);
+    setMapUploadNotice(null);
+    try {
+      const result = await uploadMapFiles("SCOUT01", pendingMapFiles);
+      setMapUploadNotice(
+        result.saved_files.length > 0
+          ? `Archived: ${result.saved_files.join(", ")}`
+          : "No supported map files were archived.",
+      );
+      setPendingMapFiles([]);
+      if (mapFileInputRef.current) mapFileInputRef.current.value = "";
+    } catch (err) {
+      setMapUploadError(
+        err instanceof Error ? err.message : "Map file upload failed.",
+      );
+    } finally {
+      setIsUploadingMap(false);
+    }
+  };
+
   return (
     <section className="center-map" aria-label="SVG Floor Map">
       <div className="map-header">
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           <h2 className="panel-title">
-            TACTICAL MAP // {activeMap.coordinate_system.toUpperCase()}
+            {activeLayer === "floor"
+              ? `TACTICAL MAP // ${activeMap.coordinate_system.toUpperCase()}`
+              : "SCOUT01 // LIVE 2D SLAM PROJECTION"}
           </h2>
-          {activeMap.is_provisional_simulation_config && (
+          {activeLayer === "floor" && activeMap.is_provisional_simulation_config && (
             <span
               className="badge badge-warning"
               style={{ fontSize: "9px", padding: "1px 6px" }}
@@ -192,6 +234,24 @@ export function FloorMap(): React.JSX.Element {
         </div>
 
         <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+          <div className="map-layer-toggle" aria-label="Map display layer">
+            <button
+              type="button"
+              className={`btn ${activeLayer === "floor" ? "btn-primary" : "btn-secondary"}`}
+              aria-pressed={activeLayer === "floor"}
+              onClick={() => setActiveLayer("floor")}
+            >
+              FLOOR PLAN
+            </button>
+            <button
+              type="button"
+              className={`btn ${activeLayer === "lidar" ? "btn-primary" : "btn-secondary"}`}
+              aria-pressed={activeLayer === "lidar"}
+              onClick={() => setActiveLayer("lidar")}
+            >
+              LIVE 2D MAP
+            </button>
+          </div>
           {(["SCOUT01"] as const).map((vid) => {
             const v = state.vehicles[vid];
             const isSelected = state.selectedVehicleId === vid;
@@ -216,7 +276,7 @@ export function FloorMap(): React.JSX.Element {
       </div>
 
       <div className="map-viewport">
-        {mapError && (
+        {activeLayer === "floor" && mapError && (
           <div
             className="c2-alert-box c2-alert-warn"
             role="status"
@@ -227,7 +287,7 @@ export function FloorMap(): React.JSX.Element {
         )}
 
         {/* Floating Zoom & Layer Controls */}
-        <div className="map-toolbar">
+        {activeLayer === "floor" && <div className="map-toolbar">
           <button
             type="button"
             className="btn btn-secondary"
@@ -266,10 +326,58 @@ export function FloorMap(): React.JSX.Element {
           >
             TRL
           </button>
-        </div>
+          <input
+            ref={mapFileInputRef}
+            type="file"
+            accept=".ply,.pcd,.db"
+            multiple
+            hidden
+            aria-label="Select SCOUT01 map files"
+            onChange={(event) => {
+              const files = Array.from(event.currentTarget.files ?? []);
+              setPendingMapFiles(files);
+              setMapUploadNotice(null);
+              setMapUploadError(null);
+            }}
+          />
+          <button
+            type="button"
+            className="btn btn-secondary"
+            style={{ fontSize: "8px", padding: "4px" }}
+            onClick={() => {
+              if (pendingMapFiles.length > 0) {
+                void handleArchiveMapFiles();
+              } else {
+                mapFileInputRef.current?.click();
+              }
+            }}
+            disabled={isUploadingMap}
+            aria-label={
+              pendingMapFiles.length > 0
+                ? `Archive ${pendingMapFiles.length} selected map files`
+                : "Select map files to archive"
+            }
+            title="Archive .ply, .pcd, or .db files on the backend; does not change the live map."
+          >
+            {isUploadingMap
+              ? "SAVING..."
+              : pendingMapFiles.length > 0
+                ? `SAVE ${pendingMapFiles.length}`
+                : "ARCHIVE MAP"}
+          </button>
+        </div>}
+        {(mapUploadNotice || mapUploadError) && (
+          <div
+            className={`c2-alert-box ${mapUploadError ? "c2-alert-error" : "c2-alert-info"}`}
+            role={mapUploadError ? "alert" : "status"}
+            style={{ position: "absolute", bottom: "8px", left: "8px", zIndex: 5 }}
+          >
+            {mapUploadError ?? mapUploadNotice}
+          </div>
+        )}
 
         {/* Selected Waypoint HUD Card */}
-        {selectedWaypoint && (
+        {activeLayer === "floor" && selectedWaypoint && (
           <div className="waypoint-hud-card">
             <div style={{ color: "var(--marker-scout)", fontWeight: 600 }}>
               {selectedWaypoint.label} [{selectedWaypoint.id}]
@@ -280,7 +388,8 @@ export function FloorMap(): React.JSX.Element {
           </div>
         )}
 
-        {/* Main Tactical SVG Canvas */}
+        {activeLayer === "lidar" ? <LidarScanView /> : (
+        /* Main Tactical SVG Canvas */
         <svg
           viewBox={`0 0 ${MAP_VIEWBOX_WIDTH} ${MAP_VIEWBOX_HEIGHT}`}
           width="100%"
@@ -635,6 +744,7 @@ export function FloorMap(): React.JSX.Element {
             );
           })}
         </svg>
+        )}
       </div>
     </section>
   );

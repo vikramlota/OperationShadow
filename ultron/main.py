@@ -8,10 +8,10 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from ultron.schemas.world import (
-    WorldModel, MissionState, ScoutState, HawkState, VehicleMode, ConnectionStatus
+    WorldModel, MissionState, ScoutState, VehicleMode, ConnectionStatus
 )
 from ultron.schemas.mission import MissionStatus
-from ultron.schemas.commands import Position2D, Position3D
+from ultron.schemas.commands import Position2D
 from ultron.graph.workflow import build_ultron_graph
 from ultron.simulation.mock_vehicles import SimulationHarness
 from ultron.state import UltronState

@@ -110,6 +110,23 @@ operation-shadow/
 - `GET /map` — Retrieve static indoor floor-plan configuration (labeled provisional simulation config).
 - `POST /emergency-stop` — Dedicated Emergency Stop Fast Path (`ALL`, `SCOUT01`, or `HAWK01`) bypassing ULTRON and synchronous DB writes, with explicit per-vehicle dispatch/ack/stop-confirmation evidence and async post-dispatch audit logging.
 - `WS /ws/dashboard` — Push-only dashboard WebSocket streaming an initial `snapshot` envelope followed by live `telemetry`, `event`, `reasoning_trace`, and `mission_status` envelopes.
+- `GET /scout/control/status` and `WS /ws/scout/control` — W/A/S/D/X keyboard control. By default this is simulation-only. Optional USB serial output writes one uppercase ASCII command byte with no newline at 115200 baud, matching the hardware-team transmitter sketch. Serial remains disabled unless `SHADOW_SCOUT_SERIAL_ENABLED=true`, real vehicle mode is selected, `SHADOW_HARDWARE_LOCKOUT=false`, and `SHADOW_SCOUT_SERIAL_FAILSAFE_VERIFIED=true`.
+
+The serial writer does not change transmitter firmware and does not guarantee a stop after USB loss. The provided firmware continues broadcasting its last motor command if serial input stops; therefore keep the serial and hardware gates disabled until an independent transmitter/receiver failsafe on USB loss is verified. Do not use the provisional `hardware/scout/communication/serial_bridge.py` motor frame as this transmitter's protocol.
+
+Frontend keepalive rate can be set with `VITE_SCOUT_CONTROL_RATE_HZ` in `frontend/.env` (5–20 Hz; default 10 Hz). In an explicitly enabled serial mode, keepalives retransmit the held one-byte movement command; lease expiry, browser disconnect, and backend shutdown attempt to send `X` while USB serial remains available.
+
+### Keyboard Control Verification and Hardware Gate
+
+1. **Backend-to-transmitter serial:** Use a USB serial loopback or mock serial port to verify exact bytes before connecting the transmitter. The backend sends no newline.
+2. **W/A/S/D/X serial bytes:** Verify `b"W"`, `b"A"`, `b"S"`, `b"D"`, and `b"X"` at 115200 baud; backend lease keepalives repeat the current movement byte.
+3. **ESP-NOW receiver forwarding:** Only test with the wheels lifted and motor power safely disabled, then verify behavior with the hardware team.
+4. **Dashboard controls:** With default safety settings, wait for `SIMULATOR LINKED`, hold W/A/S/D, and verify `CURRENT` changes. Release and verify `CURRENT: X`. In authorized serial mode, status reports transmitter availability and controls are disabled when it is offline.
+5. **Release/disconnect safety:** Verify X on release, emergency stop, browser disconnect, and backend shutdown. These send attempts do not guarantee stopping after USB loss; the firmware/receiver must independently stop the motors on missing serial input.
+
+Keep `SHADOW_HARDWARE_LOCKOUT=true`, serial disabled, and the failsafe-verification flag false until the independent USB-loss failsafe is verified. Do not use live serial motion until the hardware safety gate is formally cleared.
+
+Troubleshooting: check `GET /scout/control/status` and the browser connection to `/ws/scout/control`. In default mode, the panel identifies **SIMULATION ONLY** and `transmitter_connected: false` is expected. A failed serial write reports an error and marks the transmitter offline; it cannot send X over a disconnected port.
 
 ## Quick Start
 

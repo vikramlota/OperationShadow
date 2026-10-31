@@ -88,6 +88,14 @@ The console is designed for a `1440×900` to `1920×1080` desktop operator scree
 3. **Priority 3 — Visual Confirmation & Agent Transparency (`CameraFeed`, `ReasoningTracePanel`, `EventLog`)**: Right-hand operational rail stacking the direct MJPEG camera viewport, ULTRON's decision trace (`trigger`, `rationale`, `resulting_task_ids`), and chronological system events.
 4. **Priority 4 — Post-Mission Analysis (`MissionReplayScrubber`)**: Docked below the tactical map; remains compact in standby during live execution and expands to scrub ordered events and World Model snapshots (`plan_before` / `plan_after`) once a mission completes.
 
+### Operator Interaction and Route Guardrails
+
+- Mission dispatch, mission completion, replay loading, event refresh, vehicle status/sensor/observation sync, ROS link status sync, emergency stop, and map-file archival must surface backend errors and confirmation/acknowledgement state instead of appearing successful on failure.
+- `SYNC` vehicle telemetry must fetch status, raw sensor data, and observations; the raw sensor response remains inspectable as a read-only snapshot.
+- Map-file archival accepts `.ply`, `.pcd`, and `.db` files, confirms before upload because canonical backend filenames may be replaced, and must state that archival does not update the live XY projection.
+- Real hardware mode remains visibly locked and non-interactive until external vehicle contracts and physical failsafes are verified. No routine dashboard control may dispatch manual vehicle commands; the authenticated manual-command API is not exposed as an operator button under the current lockout.
+- The backend ROSBridge status describes backend ingest only. The live camera and map may use direct, read-only browser connections and must not be presented as backend ROSBridge connectivity.
+
 ## 5. Component Styling Specifications
 
 - **Operational Panels**:

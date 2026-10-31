@@ -1,0 +1,59 @@
+#!/bin/bash
+# Enable SSH on SCOUT01 - Run this script ON THE SCOUT01 ROVER
+
+echo "=== SCOUT01 SSH Enablement Script ==="
+echo ""
+
+# Check if running with sudo
+if [ "$EUID" -ne 0 ]; then 
+    echo "❌ This script needs sudo privileges."
+    echo "Run: sudo bash enable_scout_ssh.sh"
+    exit 1
+fi
+
+echo "1. Checking if SSH server is installed..."
+if ! command -v sshd &> /dev/null; then
+    echo "   SSH server not found. Installing openssh-server..."
+    apt update
+    apt install -y openssh-server
+else
+    echo "   ✅ SSH server is installed"
+fi
+
+echo ""
+echo "2. Starting SSH service..."
+systemctl start ssh
+systemctl enable ssh
+
+echo ""
+echo "3. Checking SSH service status..."
+if systemctl is-active --quiet ssh; then
+    echo "   ✅ SSH service is running"
+else
+    echo "   ❌ SSH service failed to start"
+    systemctl status ssh
+    exit 1
+fi
+
+echo ""
+echo "4. Configuring firewall (UFW)..."
+echo "   Allowing SSH from control laptop: 10.241.171.76"
+ufw allow from 10.241.171.76 to any port 22 proto tcp
+ufw reload
+
+echo ""
+echo "5. Verifying SSH is listening on port 22..."
+if netstat -tlnp | grep -q ':22'; then
+    echo "   ✅ SSH is listening on port 22"
+else
+    echo "   ⚠️  SSH may not be listening properly"
+fi
+
+echo ""
+echo "=== Configuration Complete ==="
+echo ""
+echo "SSH should now be accessible from control laptop (10.241.171.76)"
+echo ""
+echo "Test from control laptop:"
+echo "  ssh $(whoami)@10.241.171.41"
+echo ""

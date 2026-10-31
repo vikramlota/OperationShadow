@@ -410,6 +410,47 @@ html, body, #root {
   min-height: 0;
 }
 
+.scout-control-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.scout-control-safety {
+  color: var(--status-warning);
+  font: 9px var(--font-data);
+  line-height: 1.4;
+}
+
+.scout-control-status {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  color: var(--text-primary);
+  font: 10px var(--font-data);
+}
+
+.scout-control-keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 34px);
+  justify-content: center;
+  gap: 3px;
+}
+
+.scout-control-keypad .btn {
+  min-width: 34px;
+  padding: 4px;
+  font: 700 11px var(--font-data);
+}
+
+.scout-control-stop {
+  align-self: center;
+  padding: 4px 10px;
+  font: 700 10px var(--font-data);
+  border-color: var(--status-warning);
+  color: var(--status-warning);
+}
+
 .ops-dock {
   grid-area: dock;
   display: grid;
@@ -550,6 +591,18 @@ html, body, #root {
   border-bottom: 1px solid var(--border-subtle);
   border-left: 2px solid var(--accent-primary);
   flex-shrink: 0;
+  gap: 8px;
+}
+
+.map-layer-toggle {
+  display: flex;
+  gap: 3px;
+}
+
+.map-layer-toggle .btn {
+  padding: 3px 7px;
+  font-size: 9px;
+  white-space: nowrap;
 }
 
 .map-viewport {
@@ -561,6 +614,50 @@ html, body, #root {
   justify-content: center;
   min-height: 0;
   overflow: hidden;
+}
+
+.lidar-scan-view {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  background: var(--sf-void);
+}
+
+.lidar-scan-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 5px 8px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+  font: 8px var(--font-data);
+  line-height: 1.2;
+}
+
+.lidar-scan-meta > span {
+  white-space: nowrap;
+}
+
+.lidar-scan-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.lidar-scan-empty {
+  position: absolute;
+  inset: 45px 10px 10px;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  color: var(--text-muted);
+  font: 11px var(--font-data);
+  pointer-events: none;
 }
 
 .map-toolbar {

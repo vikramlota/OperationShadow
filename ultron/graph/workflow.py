@@ -1,7 +1,16 @@
+from typing import Any, Protocol, cast
 from ultron.state import UltronState
 from ultron.graph.nodes import (
     node_plan, node_validate, node_assign, node_evaluate, node_degraded
 )
+
+
+class GraphRunner(Protocol):
+    def invoke(
+        self,
+        state: UltronState,
+        config: Any = None,
+    ) -> UltronState: ...
 
 
 def route_start(state: UltronState) -> str:
@@ -27,7 +36,7 @@ def route_evaluation(state: UltronState) -> str:
     return "end"
 
 
-def build_ultron_graph():
+def build_ultron_graph() -> GraphRunner:
     """Compiles the ULTRON state machine workflow."""
     try:
         from langgraph.graph import StateGraph, START, END
@@ -70,12 +79,26 @@ def build_ultron_graph():
             {"replan": "replan", "end": END}
         )
 
-        return builder.compile()
-    except (ImportError, Exception):
+        compiled = builder.compile()
+
+        class CompiledGraphRunner:
+            def invoke(
+                self,
+                state: UltronState,
+                config: Any = None,
+            ) -> UltronState:
+                return cast(UltronState, compiled.invoke(state, config=config))
+
+        return CompiledGraphRunner()
+    except ImportError:
         # Fallback runner for testing when langgraph is not installed
         class SimpleGraphRunner:
-            def invoke(self, state, config=None):
-                st = dict(state)
+            def invoke(
+                self,
+                state: UltronState,
+                config: Any = None,
+            ) -> UltronState:
+                st: UltronState = state.copy()
                 # If a plan already exists, run evaluate -> replan (if needed)
                 if st.get("proposed_plan") is not None:
                     st.update(node_evaluate(st))

@@ -15,8 +15,6 @@ def validate_plan(plan: MissionPlan, world: WorldModel) -> Tuple[bool, List[str]
     Returns (is_valid, list_of_errors).
     """
     errors: List[str] = []
-    active_priorities = set()
-
     # Extract vocabulary from mission objective to ground references
     obj_words = set(world.mission.objective.lower().replace(",", " ").replace(".", " ").split())
     standard_areas = {"sector_a", "sector_b", "zone_1", "zone_2", "corridor", "building", "arena"}

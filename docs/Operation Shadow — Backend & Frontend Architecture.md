@@ -222,6 +222,8 @@ SQLite is sufficient at this scale (TRD v2.0 §27) — one operator, one mission
 | `/events` | GET | `?mission_id=` | Event log, chronological |
 | `/map` | GET | — | Static floor-plan config (room boundaries, fixed waypoints) for the dashboard's SVG map |
 | `/emergency-stop` | POST | `{ "vehicle_id": "ALL" \| "SCOUT01" \| "HAWK01" }` | Ack — see §10 for why this path is special |
+| `/scout/control/status` | GET | — | Control mode and state; optional safety-gated USB transmitter connection status |
+| `/ws/scout/control` | WebSocket | `{"type":"command","command":"W\|A\|S\|D\|X"}` or `{"type":"keepalive"}` | Simulation by default; optional serial output sends one command byte only when serial, real-mode, hardware-lockout, and failsafe-confirmation gates permit it; disconnect/lease expiry attempts `X` |
 
 ---
 

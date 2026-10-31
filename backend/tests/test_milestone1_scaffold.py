@@ -26,6 +26,7 @@ async def test_health_endpoint_returns_expected_defaults() -> None:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         response = await client.get("/health")
+        scout_status = await client.get("/scout/status")
 
     assert response.status_code == 200
     payload = response.json()
@@ -35,6 +36,15 @@ async def test_health_endpoint_returns_expected_defaults() -> None:
     assert payload["default_vehicle_mode"] == "simulated"
     assert isinstance(payload["ultron_is_stub"], bool)
     assert payload["vehicles"] == ["SCOUT01"]
+
+    assert scout_status.status_code == 200
+    assert scout_status.json() == {
+        "scout_id": "SCOUT01",
+        "rosbridge_url": "ws://10.241.171.41:9090",
+        "enabled": False,
+        "connected": False,
+        "mode": "disabled",
+    }
 
 
 async def test_async_sqlite_engine_connectivity() -> None:

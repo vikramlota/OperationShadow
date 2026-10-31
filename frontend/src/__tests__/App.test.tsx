@@ -52,7 +52,10 @@ const DEFAULT_FLOOR_MAP: apiClient.FloorPlanConfigPayload = {
 
 class MockWebSocket {
   public static instances: MockWebSocket[] = [];
+  public static OPEN = 1;
   public url: string;
+  public readyState = 0;
+  public sentMessages: string[] = [];
   public onopen: (() => void) | null = null;
   public onmessage: ((event: { data: string }) => void) | null = null;
   public onerror: (() => void) | null = null;
@@ -66,9 +69,15 @@ class MockWebSocket {
 
   public close(): void {
     this.closed = true;
+    this.readyState = 3;
+  }
+
+  public send(message: string): void {
+    this.sentMessages.push(message);
   }
 
   public triggerOpen(): void {
+    this.readyState = MockWebSocket.OPEN;
     this.onopen?.();
   }
 
@@ -77,8 +86,54 @@ class MockWebSocket {
   }
 
   public triggerClose(): void {
+    this.readyState = 3;
     this.onclose?.();
   }
+}
+
+function dashboardWebSockets(): MockWebSocket[] {
+  return MockWebSocket.instances.filter((socket) =>
+    socket.url.includes("/ws/dashboard"),
+  );
+}
+
+function makePointCloudMessage(topic = "/cloud_registered", shift = 0): object {
+  const buffer = new ArrayBuffer(36);
+  const view = new DataView(buffer);
+  const points = [
+    [1 + shift, 0, 0],
+    [0 + shift, 2, 0],
+    [-1 + shift, 0, 0],
+  ];
+  points.forEach(([x, y, z], pointIndex) => {
+    const offset = pointIndex * 12;
+    view.setFloat32(offset, x, true);
+    view.setFloat32(offset + 4, y, true);
+    view.setFloat32(offset + 8, z, true);
+  });
+  const bytes = String.fromCharCode(...new Uint8Array(buffer));
+
+  return {
+    op: "publish",
+    topic,
+    msg: {
+      header: {
+        frame_id: "camera_init",
+        stamp: { sec: 100, nanosec: 0 },
+      },
+      height: 1,
+      width: points.length,
+      fields: [
+        { name: "x", offset: 0, datatype: 7, count: 1 },
+        { name: "y", offset: 4, datatype: 7, count: 1 },
+        { name: "z", offset: 8, datatype: 7, count: 1 },
+      ],
+      is_bigendian: false,
+      point_step: 12,
+      row_step: 36,
+      data: btoa(bytes),
+    },
+  };
 }
 
 describe("Operation Shadow Milestone 5 & 6 Tactical Command Dashboard", () => {
@@ -213,8 +268,8 @@ describe("Operation Shadow Milestone 5 & 6 Tactical Command Dashboard", () => {
       </DashboardProvider>,
     );
 
-    expect(MockWebSocket.instances.length).toBe(1);
-    const ws1 = MockWebSocket.instances[0];
+    expect(dashboardWebSockets().length).toBe(1);
+    const ws1 = dashboardWebSockets()[0];
 
     act(() => {
       ws1.triggerOpen();
@@ -345,8 +400,8 @@ describe("Operation Shadow Milestone 5 & 6 Tactical Command Dashboard", () => {
     act(() => {
       vi.advanceTimersByTime(1600);
     });
-    expect(MockWebSocket.instances.length).toBe(2);
-    const ws2 = MockWebSocket.instances[1];
+    expect(dashboardWebSockets().length).toBe(2);
+    const ws2 = dashboardWebSockets()[1];
     act(() => {
       ws2.triggerOpen();
     });
@@ -354,23 +409,16 @@ describe("Operation Shadow Milestone 5 & 6 Tactical Command Dashboard", () => {
     vi.useRealTimers();
   });
 
-  // 7. Simulation-mode status & hardware lockout error
-  it("handles simulated mode confirmation and displays hardware lockout error when attempting real mode", async () => {
-    vi.spyOn(apiClient, "setVehicleSimulatedMode")
-      .mockResolvedValueOnce({
+  // 7. Simulation-mode status & hardware lockout
+  it("confirms simulated mode and prevents real-mode requests while hardware is locked", async () => {
+    const modeSpy = vi.spyOn(apiClient, "setVehicleSimulatedMode")
+      .mockResolvedValue({
         vehicle_id: "SCOUT01",
         mode: "simulated",
         enabled: true,
         status: "IDLE",
         connection: "CONNECTED",
-      })
-      .mockRejectedValueOnce(
-        new apiClient.ApiClientError(
-          "Real hardware control is locked (SHADOW_HARDWARE_LOCKOUT=true).",
-          409,
-          "HARDWARE_LOCKOUT_ACTIVE",
-        ),
-      );
+      });
 
     render(
       <DashboardProvider>
@@ -391,12 +439,8 @@ describe("Operation Shadow Milestone 5 & 6 Tactical Command Dashboard", () => {
     const realBtn = screen.getByRole("button", {
       name: "Attempt Real Hardware Mode for SCOUT01",
     });
-    fireEvent.click(realBtn);
-    await waitFor(() => {
-      expect(
-        screen.getByText(/Real hardware control is locked/i),
-      ).toBeInTheDocument();
-    });
+    expect(realBtn).toBeDisabled();
+    expect(modeSpy).toHaveBeenCalledTimes(1);
 
     // Reducer also enforces hardware lockout
     const nextState = dashboardReducer(initialDashboardState, {
@@ -404,6 +448,188 @@ describe("Operation Shadow Milestone 5 & 6 Tactical Command Dashboard", () => {
       payload: { vehicleId: "SCOUT01", mode: "real" },
     });
     expect(nextState.vehicles.SCOUT01.mode).toBe("simulated");
+  });
+
+  it("syncs vehicle status, raw sensors, observations, and SCOUT ROS status through their routes", async () => {
+    const sensorsSpy = vi.spyOn(apiClient, "fetchVehicleSensors").mockResolvedValue({
+      vehicle_id: "SCOUT01",
+      status: "IDLE",
+      connection: "DISCONNECTED",
+      mode: "simulated",
+      battery: 100,
+      position_x: 0,
+      position_y: 0,
+      position_alt: 0,
+      last_heartbeat: null,
+      is_stale: true,
+      sequence: 7,
+      raw_sensors: { lidar_points: 12 },
+    });
+    const scoutStatusSpy = vi.spyOn(apiClient, "fetchScoutStatus").mockResolvedValue({
+      scout_id: "SCOUT01",
+      rosbridge_url: "ws://10.241.171.41:9090",
+      enabled: false,
+      connected: false,
+      mode: "disabled",
+    });
+    vi.spyOn(apiClient, "fetchVehicleStatus").mockResolvedValue({
+      id: "SCOUT01",
+      vehicle_type: "ground",
+      status: "IDLE",
+      battery: 100,
+      position_x: 0,
+      position_y: 0,
+      position_alt: 0,
+      connection: "DISCONNECTED",
+      mode: "simulated",
+      last_heartbeat: null,
+      is_stale: true,
+      active_task_id: null,
+    });
+    vi.spyOn(apiClient, "fetchVehicleObservations").mockResolvedValue([]);
+
+    render(
+      <DashboardProvider>
+        <App enableWebSocket={false} />
+      </DashboardProvider>,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sync SCOUT01 telemetry" }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/SENSOR SNAPSHOT \/\/ SEQ 7 \/\/ STALE/i),
+      ).toBeInTheDocument();
+    });
+    expect(sensorsSpy).toHaveBeenCalledWith("SCOUT01");
+    expect(apiClient.fetchVehicleStatus).toHaveBeenCalledWith("SCOUT01");
+    expect(apiClient.fetchVehicleObservations).toHaveBeenCalledWith(
+      "SCOUT01",
+      undefined,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sync SCOUT01 ROS status" }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/BACKEND ROS: DISABLED\s*\/\/\s*NOT LINKED/i),
+      ).toBeInTheDocument();
+    });
+    expect(scoutStatusSpy).toHaveBeenCalledOnce();
+  });
+
+  it("archives selected SLAM map files through the map upload route with confirmation", async () => {
+    const uploadSpy = vi.spyOn(apiClient, "uploadMapFiles").mockResolvedValue({
+      status: "success",
+      vehicle_id: "SCOUT01",
+      saved_files: ["lidar_map.pcd"],
+    });
+    vi.stubGlobal("confirm", vi.fn(() => true));
+
+    render(
+      <DashboardProvider>
+        <App enableWebSocket={false} />
+      </DashboardProvider>,
+    );
+    const file = new File(["pcd data"], "lidar_map.pcd", {
+      type: "application/octet-stream",
+    });
+    fireEvent.change(screen.getByLabelText("Select SCOUT01 map files"), {
+      target: { files: [file] },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Archive 1 selected map files" }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Archived: lidar_map.pcd")).toBeInTheDocument();
+    });
+    expect(uploadSpy).toHaveBeenCalledWith("SCOUT01", [file]);
+    expect(window.confirm).toHaveBeenCalledOnce();
+  });
+
+  it("sends held keyboard input, suppresses repeats, and sends X on release or conflict", async () => {
+    render(
+      <DashboardProvider>
+        <App enableWebSocket={false} />
+      </DashboardProvider>,
+    );
+
+    await waitFor(() => {
+      expect(
+        MockWebSocket.instances.some((socket) =>
+          socket.url.includes("/ws/scout/control"),
+        ),
+      ).toBe(true);
+    });
+    const controlSocket = MockWebSocket.instances.find((socket) =>
+      socket.url.includes("/ws/scout/control"),
+    );
+    if (!controlSocket) throw new Error("Missing simulated control WebSocket.");
+    act(() => controlSocket.triggerOpen());
+    expect(
+      screen.getByRole("button", { name: "Simulate W forward" }),
+    ).toBeEnabled();
+
+    act(() => {
+      fireEvent.keyDown(window, { key: "w" });
+      fireEvent.keyDown(window, { key: "w", repeat: true });
+    });
+    expect(
+      controlSocket.sentMessages.map((message) => JSON.parse(message)),
+    ).toEqual([{ type: "command", command: "W" }]);
+
+    act(() => fireEvent.keyUp(window, { key: "w" }));
+    expect(JSON.parse(controlSocket.sentMessages[1])).toEqual({
+      type: "command",
+      command: "X",
+    });
+
+    act(() => {
+      fireEvent.keyDown(window, { key: "a" });
+      fireEvent.keyDown(window, { key: "d" });
+    });
+    expect(JSON.parse(controlSocket.sentMessages[2])).toEqual({
+      type: "command",
+      command: "A",
+    });
+    expect(JSON.parse(controlSocket.sentMessages[3])).toEqual({
+      type: "command",
+      command: "X",
+    });
+    expect(screen.getByText(/Only one movement direction may be held/i)).toBeInTheDocument();
+  });
+
+  it("encodes map archival as multipart without overriding the browser boundary header", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          status: "success",
+          vehicle_id: "SCOUT01",
+          saved_files: ["lidar_map.pcd"],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    const file = new File(["pcd data"], "lidar_map.pcd", {
+      type: "application/octet-stream",
+    });
+
+    await expect(apiClient.uploadMapFiles("SCOUT01", [file])).resolves.toMatchObject({
+      saved_files: ["lidar_map.pcd"],
+    });
+
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(url).toBe(`${apiClient.API_BASE_URL}/upload-map/SCOUT01`);
+    const requestBody = init?.body;
+    expect(requestBody).toBeInstanceOf(FormData);
+    if (!(requestBody instanceof FormData)) {
+      throw new Error("Map archive request body must be FormData.");
+    }
+    expect(requestBody.getAll("files")).toHaveLength(1);
+    expect(new Headers(init?.headers).has("Content-Type")).toBe(false);
   });
 
   // 9. Mission replay loading and timeline selection
@@ -476,27 +702,27 @@ describe("Operation Shadow Milestone 5 & 6 Tactical Command Dashboard", () => {
     ).toBeInTheDocument();
   });
 
-  // 10. Camera feed unavailable/error states
-  it("displays honest camera unavailable state when unconfigured and error state when stream fails", () => {
+  // 10. Direct SCOUT MJPEG camera feed
+  it("loads the confirmed SCOUT MJPEG URL directly and reports when the stream fails", () => {
     render(
       <DashboardProvider>
         <App enableWebSocket={false} />
       </DashboardProvider>,
     );
 
-    expect(
-      screen.getByText(
-        /CAMERA STREAM UNAVAILABLE \/\/ NO DIRECT MJPEG URL CONFIGURED/i,
-      ),
-    ).toBeInTheDocument();
+    const img = screen.getByAltText("SCOUT01 direct MJPEG camera stream");
+    expect(img).toHaveAttribute(
+      "src",
+      "http://10.241.171.41:8081/stream.mjpg",
+    );
+    expect(screen.getByText("DIRECT MJPEG")).toBeInTheDocument();
 
     const urlInput = screen.getByLabelText("SCOUT01 MJPEG Stream URL");
     fireEvent.change(urlInput, {
       target: { value: "http://192.0.2.10:8080/stream.mjpg" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "SET URL" }));
+    fireEvent.click(screen.getByRole("button", { name: "USE MJPEG URL" }));
 
-    const img = screen.getByAltText("SCOUT01 direct MJPEG camera stream");
     expect(img).toHaveAttribute("src", "http://192.0.2.10:8080/stream.mjpg");
 
     // Simulate stream load failure
@@ -506,6 +732,72 @@ describe("Operation Shadow Milestone 5 & 6 Tactical Command Dashboard", () => {
         /CAMERA STREAM ERROR \/\/ DIRECT MJPEG FEED UNREACHABLE/i,
       ),
     ).toBeInTheDocument();
+  });
+
+  it("accumulates registered LiDAR scans and plots the SLAM path in 2D", async () => {
+    render(
+      <DashboardProvider>
+        <App enableWebSocket={false} />
+      </DashboardProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "LIVE 2D MAP" }));
+    expect(screen.getByText(/Subscribing read-only to \/cloud_registered and \/path/i)).toBeInTheDocument();
+
+    const lidarSocket = MockWebSocket.instances.find(
+      (socket) => socket.url === apiClient.ROSBRIDGE_URL,
+    );
+    expect(lidarSocket).toBeDefined();
+    if (!lidarSocket) throw new Error("ROSBridge LiDAR socket was not created");
+
+    act(() => lidarSocket.triggerOpen());
+    expect(JSON.parse(lidarSocket.sentMessages[0])).toMatchObject({
+      op: "subscribe",
+      topic: "/cloud_registered",
+      type: "sensor_msgs/msg/PointCloud2",
+    });
+    expect(JSON.parse(lidarSocket.sentMessages[1])).toMatchObject({
+      op: "subscribe",
+      topic: "/path",
+      type: "nav_msgs/msg/Path",
+    });
+
+    act(() => {
+      lidarSocket.triggerMessage(makePointCloudMessage());
+      lidarSocket.triggerMessage({
+        op: "publish",
+        topic: "/path",
+        msg: {
+          poses: [
+            { pose: { position: { x: 0, y: 0, z: 0 } } },
+            { pose: { position: { x: 2, y: 1, z: 0 } } },
+          ],
+        },
+      });
+      lidarSocket.triggerMessage(makePointCloudMessage("/cloud_registered", 3));
+    });
+    await waitFor(() => {
+      expect(screen.getByText("LIVE")).toBeInTheDocument();
+      expect(screen.getByText(/PTS 3 \/ VOXELS 6/i)).toBeInTheDocument();
+      expect(screen.getByText("FRAME camera_init")).toBeInTheDocument();
+      expect(screen.getByTestId("lidar-scan-canvas")).toBeInTheDocument();
+      expect(
+        screen.getByText(/XY VISUAL ONLY \/\/ NO NAVIGATION/i),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("loads the short simulated hackathon demo objective", () => {
+    render(
+      <DashboardProvider>
+        <App enableWebSocket={false} />
+      </DashboardProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "LOAD HACKATHON DEMO TASK" }));
+    expect(screen.getByLabelText(/MISSION OBJECTIVE/i)).toHaveValue(
+      "Simulated SCOUT01: perform one short sweep of Sector Alpha, identify visible obstacles, and report findings.",
+    );
   });
 
   // 11 & 12. Emergency-stop confirmation, partial failure, and distinction between HTTP 200 and confirmed stopping
@@ -650,6 +942,14 @@ describe("Operation Shadow Milestone 5 & 6 Tactical Command Dashboard", () => {
         screen.getByRole("button", { name: "Complete Simulated Mission" }),
       ).toBeInTheDocument();
     });
+    expect(
+      screen.getByRole("note", {
+        name: /ULTRON planning and safety validation run on dispatch; simulated only/i,
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Run ULTRON Simulation Pipeline" }),
+    ).not.toBeInTheDocument();
 
     fireEvent.click(
       screen.getByRole("button", { name: "Complete Simulated Mission" }),

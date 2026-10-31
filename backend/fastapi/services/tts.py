@@ -8,6 +8,7 @@ physical hardware commands are dispatched immediately and never delayed by TTS.
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from core.logging import get_logger
 
@@ -18,7 +19,7 @@ DEFAULT_VOICE_ID = "JBFqnCBsd6RMkjVDRZzb"
 DEFAULT_MODEL_ID = "eleven_multilingual_v2"
 
 
-def _get_client():
+def _get_client() -> Any | None:
     """Lazily initialise the ElevenLabs client (requires ELEVENLABS_API_KEY)."""
     api_key = os.getenv("ELEVENLABS_API_KEY")
     if not api_key:

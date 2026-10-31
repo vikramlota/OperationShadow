@@ -1,12 +1,12 @@
-from typing import Any, Dict
-from ultron.state import UltronState
+from typing import Any
+from ultron.state import UltronState, UltronStateUpdate
 from ultron.planner.engine import invoke_gemini_planner
 from ultron.safety.validator import validate_plan
 from ultron.safety.repairs import build_repair_prompt
 from ultron.evaluator.triggers import check_replanning_triggers
 
 
-def node_plan(state: UltronState) -> Dict[str, Any]:
+def node_plan(state: UltronState) -> UltronStateUpdate:
     """Generates a mission plan using the Gemini planner or cached fallback."""
     plan = invoke_gemini_planner(
         world=state["world"],
@@ -17,7 +17,7 @@ def node_plan(state: UltronState) -> Dict[str, Any]:
     return {"proposed_plan": plan}
 
 
-def node_validate(state: UltronState) -> Dict[str, Any]:
+def node_validate(state: UltronState) -> UltronStateUpdate:
     """Evaluates the proposed plan against physical constraints and known world state."""
     proposed_plan = state.get("proposed_plan")
     if not proposed_plan:
@@ -46,7 +46,7 @@ def node_validate(state: UltronState) -> Dict[str, Any]:
     }
 
 
-def node_assign(state: UltronState) -> Dict[str, Any]:
+def node_assign(state: UltronState) -> UltronStateUpdate:
     """Dispatches the validated plan's tasks to SCOUT01 and updates task tracking."""
     valid_plan = state.get("proposed_plan")
     world = state["world"]
@@ -64,12 +64,12 @@ def node_assign(state: UltronState) -> Dict[str, Any]:
     return {"world": world}
 
 
-def node_evaluate(state: UltronState) -> Dict[str, Any]:
+def node_evaluate(state: UltronState) -> UltronStateUpdate:
     """Checks physical triggers in the environment to determine if replanning is needed."""
     should_replan, rationale = check_replanning_triggers(state["world"])
     return {"trigger_rationale": rationale if should_replan else None}
 
 
-def node_degraded(state: UltronState) -> Dict[str, Any]:
+def node_degraded(state: UltronState) -> UltronStateUpdate:
     """Issues safe default commands (HOLD POSITION) if retries are exhausted."""
     return {"validation_errors": [], "repair_prompt": None}
