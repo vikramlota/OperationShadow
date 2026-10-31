@@ -154,11 +154,63 @@ function getVoxelKey(point: Point2D): string {
   return `${Math.floor(point.x / VOXEL_SIZE_METERS)}:${Math.floor(point.y / VOXEL_SIZE_METERS)}`;
 }
 
+function generateDemoLidarScan(): LidarScan {
+  const points: Point2D[] = [];
+  // Outer perimeter room walls (Sector Alpha bay in camera_init frame)
+  for (let x = -4.5; x <= 4.5; x += 0.09) {
+    points.push({ x: Number(x.toFixed(2)), y: -3.2 });
+    points.push({ x: Number(x.toFixed(2)), y: 3.2 });
+  }
+  for (let y = -3.2; y <= 3.2; y += 0.09) {
+    if (Math.abs(y) > 0.8) {
+      points.push({ x: -4.5, y: Number(y.toFixed(2)) });
+    }
+    points.push({ x: 4.5, y: Number(y.toFixed(2)) });
+  }
+  // Obstacle cluster 1 (pillar / barrier)
+  for (let x = 1.0; x <= 1.8; x += 0.09) {
+    for (let y = 0.6; y <= 1.4; y += 0.09) {
+      points.push({ x: Number(x.toFixed(2)), y: Number(y.toFixed(2)) });
+    }
+  }
+  // Obstacle cluster 2 (corridor corner)
+  for (let x = -2.2; x <= -1.4; x += 0.09) {
+    for (let y = 1.2; y <= 2.0; y += 0.09) {
+      points.push({ x: Number(x.toFixed(2)), y: Number(y.toFixed(2)) });
+    }
+  }
+  return {
+    points,
+    frameId: "camera_init",
+    pointCount: points.length * 4,
+    stamp: new Date().toISOString(),
+  };
+}
+
+const DEMO_TRAJECTORY: Point2D[] = [
+  { x: -3.5, y: -2.0 },
+  { x: -2.8, y: -1.6 },
+  { x: -2.0, y: -1.0 },
+  { x: -1.2, y: -0.4 },
+  { x: -0.3, y: 0.1 },
+  { x: 0.5, y: 0.0 },
+  { x: 1.2, y: -0.6 },
+  { x: 2.0, y: -0.2 },
+  { x: 2.6, y: 0.8 },
+  { x: 2.2, y: 1.8 },
+];
+
 export function LidarScanView(): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [map, setMap] = useState<LidarScan | null>(null);
   const [trajectory, setTrajectory] = useState<Point2D[]>([]);
   const [status, setStatus] = useState<LidarStatus>("connecting");
+
+  const loadDemoScan = (): void => {
+    setMap(generateDemoLidarScan());
+    setTrajectory(DEMO_TRAJECTORY);
+    setStatus("live");
+  };
 
   useEffect(() => {
     let active = true;
@@ -445,6 +497,15 @@ export function LidarScanView(): React.JSX.Element {
         </span>
         <span>FRAME {map?.frameId ?? "—"}</span>
         <span>ROS: cloud_registered + path</span>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          style={{ fontSize: "9px", padding: "1px 6px", height: "18px", lineHeight: "1" }}
+          onClick={loadDemoScan}
+          aria-label="Load Demo 2D SLAM Scan"
+        >
+          DEMO SLAM MAP
+        </button>
         <span>XY VISUAL ONLY // NO NAVIGATION</span>
       </div>
       <canvas
@@ -457,10 +518,20 @@ export function LidarScanView(): React.JSX.Element {
         data-testid="lidar-scan-canvas"
       />
       {!map && (
-        <div className="lidar-scan-empty" role="status">
-          {status === "error"
-            ? "Unable to decode registered PointCloud2 data. Check ROSBridge feed and point fields."
-            : `Subscribing read-only to ${MAP_TOPIC} and ${PATH_TOPIC} at ${ROSBRIDGE_URL}`}
+        <div className="lidar-scan-empty" role="status" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "6px" }}>
+          <span>
+            {status === "error"
+              ? "Unable to decode registered PointCloud2 data. Check ROSBridge feed and point fields."
+              : `Subscribing read-only to ${MAP_TOPIC} and ${PATH_TOPIC} at ${ROSBRIDGE_URL}`}
+          </span>
+          <button
+            type="button"
+            className="btn btn-primary"
+            style={{ fontSize: "10px", padding: "4px 10px", marginTop: "4px" }}
+            onClick={loadDemoScan}
+          >
+            LOAD DEMO 2D SLAM MAP
+          </button>
         </div>
       )}
     </div>

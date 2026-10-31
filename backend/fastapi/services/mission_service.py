@@ -1,21 +1,23 @@
-"""Mission lifecycle, physical SCOUT01 serial execution, and replay service (§3, §4, §7).
+"""Mission lifecycle, physical SCOUT01 serial execution, dead-reckoning map tracking, and replay service (§3, §4, §7).
 
 Uses `UltronAgentPort` (`UltronLangGraphAgent` / `StubUltronAgent`) for mission creation
 and task decomposition, persists `Mission`, `Task`, `Event`, and `ReasoningTrace`
 records to SQLite, broadcasts live updates over `DashboardGateway`, and executes
-assigned tasks over USB serial (`ScoutSerialWriter` on `/dev/ttyACM1`) when enabled.
+assigned tasks over USB serial (`ScoutSerialWriter` on `/dev/ttyACM1`) while updating
+SCOUT01's position on the SVG Tactical Floor Map in real time.
 """
 
 from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+import math
 from typing import TYPE_CHECKING
 
 from core.config import settings
 from core.errors import ResourceNotFoundError
 from core.logging import get_logger
-from db.models import Event, Mission, ReasoningTrace, Task
+from db.models import Event, Mission, ReasoningTrace, Task, Vehicle
 from schemas.entities import (
     EventRead,
     MissionCreateRequest,
@@ -50,8 +52,6 @@ def _task_serial_steps(
     upper_type = (task_type or "").upper()
     lower_target = (target or "").lower()
 
-    # When a single high-level recon task is generated (or full recon objective),
-    # execute the full 4-part physical reconnaissance loop from my_mission.py.
     if total_tasks == 1 and (
         "RECON" in upper_type
         or "return" in lower_target
@@ -214,13 +214,60 @@ class MissionService:
 
         return MissionCreateResponse(mission_id=mission_id), plan.rationale
 
+    async def _broadcast_scout_pose(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        x: float,
+        y: float,
+        status: str = "EXECUTING",
+        is_real: bool = True,
+    ) -> None:
+        """Broadcast live SCOUT01 position to WebSocket clients and sync to SQLite/WorldModel."""
+        now = datetime.now(timezone.utc)
+        clean_x = round(max(0.5, min(19.5, x)), 2)
+        clean_y = round(max(0.5, min(14.5, y)), 2)
+
+        await self._gateway.broadcast_vehicle_dict(
+            {
+                "id": "SCOUT01",
+                "status": status,
+                "connection": "CONNECTED",
+                "mode": "real" if is_real else "simulated",
+                "battery": 94.0,
+                "position_x": clean_x,
+                "position_y": clean_y,
+                "position_alt": 0.0,
+                "last_heartbeat": now,
+            }
+        )
+
+        async with session_factory() as session:
+            v_row = await session.get(Vehicle, "SCOUT01")
+            if v_row is not None:
+                v_row.position_x = clean_x
+                v_row.position_y = clean_y
+                v_row.status = status
+                v_row.connection = "CONNECTED"
+                v_row.last_heartbeat = now
+                await session.commit()
+
+        if hasattr(self._agent, "update_vehicle_state"):
+            await self._agent.update_vehicle_state(
+                "SCOUT01",
+                position_x=clean_x,
+                position_y=clean_y,
+                status=status,
+                connection="CONNECTED",
+                last_heartbeat=now,
+            )
+
     async def execute_mission_on_rover(
         self,
         session_factory: async_sessionmaker[AsyncSession],
         mission_id: str,
         serial_writer: ScoutSerialWriter | None = None,
     ) -> MissionDetailRead:
-        """Execute a mission's planned tasks on SCOUT01 via ESP32 serial and update live dashboard state."""
+        """Execute a mission's planned tasks on SCOUT01 via ESP32 serial and dead-reckon position on the map."""
         async with self._execution_lock:
             writer = serial_writer or ScoutSerialWriter(
                 port=settings.scout_serial_port,
@@ -261,6 +308,21 @@ class MissionService:
                     message=f"Starting SCOUT01 execution for {mission_id} via {mode_label} ({total_tasks} tasks).",
                 )
 
+            # Dead-reckoning map tracking: start SCOUT01 at Base Station WP_BASE (1.5, 1.5)
+            # heading is initially 0.0 rad (facing East, +x along Sector Alpha corridor)
+            curr_x = 1.5
+            curr_y = 1.5
+            curr_heading = 0.0
+
+            # Broadcast initial Base Station placement immediately
+            await self._broadcast_scout_pose(
+                session_factory,
+                curr_x,
+                curr_y,
+                status="ACTIVE",
+                is_real=hardware_connected,
+            )
+
             try:
                 for idx, task_obj in enumerate(sorted_tasks, start=1):
                     task_id = task_obj.id
@@ -285,7 +347,75 @@ class MissionService:
                                 category=EventCategoryEnum.TELEMETRY,
                                 message=f"[{idx}/{total_tasks}] {task_id}: {step_desc} -> '{cmd}' ({duration_s:.1f}s)",
                             )
-                        await writer.execute_step(cmd, duration_s, pause_s=0.4)
+
+                        # Advance rover position & transmit serial
+                        if cmd == "W":
+                            # Move forward 1.5 meters along current heading over duration_s
+                            num_ticks = max(1, int(round(duration_s / 0.4)))
+                            step_dist = 1.5 / num_ticks
+                            tick_dt = duration_s / num_ticks
+
+                            if hardware_connected:
+                                try:
+                                    await writer.send("W")
+                                except Exception:
+                                    pass
+
+                            for _ in range(num_ticks):
+                                curr_x += step_dist * math.cos(curr_heading)
+                                curr_y += step_dist * math.sin(curr_heading)
+                                await self._broadcast_scout_pose(
+                                    session_factory,
+                                    curr_x,
+                                    curr_y,
+                                    status="EXECUTING",
+                                    is_real=hardware_connected,
+                                )
+                                await asyncio.sleep(tick_dt)
+
+                            if hardware_connected:
+                                try:
+                                    await writer.send("X")
+                                except Exception:
+                                    pass
+                            await asyncio.sleep(0.3)
+
+                        elif cmd == "A":
+                            # Turn counterclockwise by 180° (or 90° for short turns)
+                            turn_angle = math.pi if duration_s >= 1.5 else (math.pi / 2.0)
+                            curr_heading = (curr_heading + turn_angle) % (2.0 * math.pi)
+                            await writer.execute_step("A", duration_s, pause_s=0.3)
+                            await self._broadcast_scout_pose(
+                                session_factory,
+                                curr_x,
+                                curr_y,
+                                status="EXECUTING",
+                                is_real=hardware_connected,
+                            )
+
+                        elif cmd == "D":
+                            # Turn clockwise
+                            turn_angle = math.pi if duration_s >= 1.5 else (math.pi / 2.0)
+                            curr_heading = (curr_heading - turn_angle) % (2.0 * math.pi)
+                            await writer.execute_step("D", duration_s, pause_s=0.3)
+                            await self._broadcast_scout_pose(
+                                session_factory,
+                                curr_x,
+                                curr_y,
+                                status="EXECUTING",
+                                is_real=hardware_connected,
+                            )
+
+                        else:
+                            # Stop or diagnostics
+                            await writer.execute_step("X", 0.1, pause_s=0.2)
+                            await self._broadcast_scout_pose(
+                                session_factory,
+                                curr_x,
+                                curr_y,
+                                status="IDLE",
+                                is_real=hardware_connected,
+                            )
 
                     # Mark task COMPLETED and broadcast to dashboard
                     async with session_factory() as session:
@@ -296,12 +426,20 @@ class MissionService:
                         detail = await self.get_mission(session, mission_id)
                         await self._gateway.broadcast_mission_status(detail)
 
-                # Ensure final STOP ('X') is sent
+                # Ensure final STOP ('X') is sent and final pose is settled
                 if hardware_connected:
                     try:
                         await writer.send("X")
                     except Exception:
                         pass
+
+                await self._broadcast_scout_pose(
+                    session_factory,
+                    curr_x,
+                    curr_y,
+                    status="IDLE",
+                    is_real=hardware_connected,
+                )
 
                 # Finalize mission as COMPLETED
                 async with session_factory() as session:
