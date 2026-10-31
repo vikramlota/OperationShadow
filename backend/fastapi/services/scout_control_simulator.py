@@ -31,6 +31,10 @@ class ScoutControlSimulator:
         self._watchdog: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()
 
+    @property
+    def serial_writer(self) -> ScoutSerialWriter | None:
+        return self._serial_writer
+
     async def start(self) -> None:
         if self._serial_writer is not None:
             await self._serial_writer.start()

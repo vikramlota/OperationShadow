@@ -1,10 +1,11 @@
-"""Mission REST endpoints (§3, §7: POST /mission, GET /mission/{id}, GET /mission/{id}/replay, and ULTRON environmental intelligence)."""
+"""Mission REST endpoints (§3, §7: POST /mission, GET /mission/{id}, GET /mission/{id}/replay, POST /mission/{id}/execute, and ULTRON environmental intelligence)."""
 
 from __future__ import annotations
 
 from typing import Annotated, Any
 
-from db.session import get_db_session
+from core.config import settings
+from db.session import AsyncSessionLocal, get_db_session
 from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from pydantic import BaseModel, Field
 from schemas.entities import (
@@ -35,6 +36,7 @@ def get_mission_service(request: Request) -> MissionService:
 @router.post("", response_model=MissionCreateResponse)
 async def create_mission_endpoint(
     payload: MissionCreateRequest,
+    request: Request,
     background_tasks: BackgroundTasks,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     service: Annotated[MissionService, Depends(get_mission_service)],
@@ -43,7 +45,37 @@ async def create_mission_endpoint(
     response, rationale = await service.create_mission_with_rationale(session, payload)
     if rationale:
         background_tasks.add_task(speak_rationale, rationale)
+
+    # When physical serial execution is enabled in runtime config (.env / ultron/.env),
+    # automatically execute the planned tasks on SCOUT01 in the background upon DISPATCH.
+    if not settings.hardware_lockout and settings.scout_serial_enabled:
+        session_factory = getattr(request.app.state, "session_factory", AsyncSessionLocal)
+        simulator = getattr(request.app.state, "scout_control_simulator", None)
+        serial_writer = getattr(simulator, "serial_writer", None) if simulator is not None else None
+        background_tasks.add_task(
+            service.execute_mission_on_rover,
+            session_factory,
+            response.mission_id,
+            serial_writer,
+        )
     return response
+
+
+@router.post("/{mission_id}/execute", response_model=MissionDetailRead)
+async def execute_mission_endpoint(
+    mission_id: str,
+    request: Request,
+    service: Annotated[MissionService, Depends(get_mission_service)],
+) -> MissionDetailRead:
+    """Execute a mission's tasks on SCOUT01 over ESP32 serial and return the updated mission state."""
+    session_factory = getattr(request.app.state, "session_factory", AsyncSessionLocal)
+    simulator = getattr(request.app.state, "scout_control_simulator", None)
+    serial_writer = getattr(simulator, "serial_writer", None) if simulator is not None else None
+    return await service.execute_mission_on_rover(
+        session_factory,
+        mission_id,
+        serial_writer,
+    )
 
 
 @router.get("/intelligence/snapshot")

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import os
+import sys
 from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_IS_PYTEST = "pytest" in sys.modules or "PYTEST_CURRENT_TEST" in os.environ
 
 
 class Settings(BaseSettings):
@@ -13,7 +17,18 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="SHADOW_",
-        env_file=(".env", "../.env", "../../.env"),
+        env_file=(
+            None
+            if _IS_PYTEST
+            else (
+                ".env",
+                "../.env",
+                "../../.env",
+                "ultron/.env",
+                "../ultron/.env",
+                "../../ultron/.env",
+            )
+        ),
         env_file_encoding="utf-8",
         extra="ignore",
     )

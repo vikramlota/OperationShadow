@@ -563,6 +563,17 @@ export async function completeMission(
   );
 }
 
+export async function executeMission(
+  missionId: string,
+): Promise<MissionDetailPayload> {
+  return requestJson<MissionDetailPayload>(
+    `/mission/${encodeURIComponent(missionId)}/execute`,
+    {
+      method: "POST",
+    },
+  );
+}
+
 export async function queryEnvironmentalIntelligence(
   query: string,
 ): Promise<GroundedEnvironmentalResponsePayload> {

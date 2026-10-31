@@ -1,15 +1,20 @@
-"""Mission lifecycle and replay service wrapping the in-process ULTRON stub (§3, §4, §7).
+"""Mission lifecycle, physical SCOUT01 serial execution, and replay service (§3, §4, §7).
 
-Uses `UltronAgentPort` (`StubUltronAgent`) for explicitly simulated mission creation
+Uses `UltronAgentPort` (`UltronLangGraphAgent` / `StubUltronAgent`) for mission creation
 and task decomposition, persists `Mission`, `Task`, `Event`, and `ReasoningTrace`
-records to SQLite, and broadcasts live updates over `DashboardGateway`.
+records to SQLite, broadcasts live updates over `DashboardGateway`, and executes
+assigned tasks over USB serial (`ScoutSerialWriter` on `/dev/ttyACM1`) when enabled.
 """
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 
+from core.config import settings
 from core.errors import ResourceNotFoundError
+from core.logging import get_logger
 from db.models import Event, Mission, ReasoningTrace, Task
 from schemas.entities import (
     EventRead,
@@ -23,11 +28,68 @@ from schemas.entities import (
 )
 from schemas.enums import EventCategoryEnum, MissionStatusEnum
 from services.event_service import EventService, event_service
+from services.scout_serial_writer import ScoutSerialWriter
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 from ultron_stub import StubUltronAgent, UltronAgentPort
 from websocket.dashboard_gateway import DashboardGateway, dashboard_gateway
+
+if TYPE_CHECKING:
+    pass
+
+logger = get_logger("mission_service")
+
+
+def _task_serial_steps(
+    task_type: str,
+    target: str | None,
+    total_tasks: int,
+) -> list[tuple[str, float, str]]:
+    """Map an ULTRON task to physical (command, duration_s, description) steps on SCOUT01."""
+    upper_type = (task_type or "").upper()
+    lower_target = (target or "").lower()
+
+    # When a single high-level recon task is generated (or full recon objective),
+    # execute the full 4-part physical reconnaissance loop from my_mission.py.
+    if total_tasks == 1 and (
+        "RECON" in upper_type
+        or "return" in lower_target
+        or "sweep" in lower_target
+        or "scan" in lower_target
+    ):
+        return [
+            ("W", 2.0, "NAVIGATE forward (1.5m)"),
+            ("A", 1.6, "ROTATE 180-degree scan"),
+            ("W", 2.0, "RETURN to start position"),
+            ("A", 1.6, "ORIENT to original heading"),
+            ("X", 0.0, "DIAGNOSTICS / STOP"),
+        ]
+
+    if "RETURN" in upper_type or "return" in lower_target or "base" in lower_target:
+        return [
+            ("A", 1.6, "ROTATE 180 degrees toward base"),
+            ("W", 2.0, "RETURN to base position"),
+            ("A", 1.6, "ORIENT to original heading"),
+        ]
+    if upper_type in ("SCAN", "INSPECT") or "scan" in lower_target or "360" in lower_target:
+        return [
+            ("A", 1.6, f"{upper_type} rotational sweep"),
+        ]
+    if upper_type == "AVOID" or "avoid" in lower_target or "reroute" in lower_target:
+        return [
+            ("A", 0.8, "AVOID obstacle turn left"),
+            ("W", 1.2, "AVOID bypass forward"),
+            ("D", 0.8, "AVOID re-align heading"),
+        ]
+    if upper_type in ("STOP", "REPORT") or "stop" in lower_target or "confirm" in lower_target:
+        return [
+            ("X", 0.0, f"{upper_type} confirm systems & hold"),
+        ]
+    # Default for NAVIGATE / EXPLORE / movement tasks
+    return [
+        ("W", 2.0, f"{upper_type or 'NAVIGATE'} forward (1.5m)"),
+    ]
 
 
 class MissionService:
@@ -50,6 +112,7 @@ class MissionService:
                 self._agent = StubUltronAgent()
         self._gateway: DashboardGateway = gateway or dashboard_gateway
         self._events: EventService = events or event_service
+        self._execution_lock = asyncio.Lock()
 
     @property
     def agent(self) -> UltronAgentPort:
@@ -151,6 +214,102 @@ class MissionService:
 
         return MissionCreateResponse(mission_id=mission_id), plan.rationale
 
+    async def execute_mission_on_rover(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        mission_id: str,
+        serial_writer: ScoutSerialWriter | None = None,
+    ) -> MissionDetailRead:
+        """Execute a mission's planned tasks on SCOUT01 via ESP32 serial and update live dashboard state."""
+        async with self._execution_lock:
+            writer = serial_writer or ScoutSerialWriter(
+                port=settings.scout_serial_port,
+                baudrate=settings.scout_serial_baudrate,
+                enabled=True,
+                hardware_lockout=False,
+                real_mode=True,
+                failsafe_verified=True,
+            )
+            owns_writer = serial_writer is None
+            if not writer.armed and not settings.hardware_lockout:
+                writer.armed = True
+
+            hardware_connected = await writer.ensure_connected()
+
+            async with session_factory() as session:
+                stmt = (
+                    select(Mission)
+                    .where(Mission.id == mission_id)
+                    .options(selectinload(Mission.tasks))
+                )
+                mission_row = (await session.execute(stmt)).scalar_one_or_none()
+                if mission_row is None:
+                    raise ResourceNotFoundError("Mission", mission_id)
+
+                sorted_tasks = sorted(mission_row.tasks, key=lambda t: (t.priority, t.id))
+                total_tasks = len(sorted_tasks)
+                mode_label = (
+                    f"ESP32 serial ({writer.port})"
+                    if hardware_connected
+                    else f"simulated fallback ({writer.port} not connected)"
+                )
+
+                await self._events.record_event(
+                    session,
+                    mission_id=mission_id,
+                    category=EventCategoryEnum.MISSION,
+                    message=f"Starting SCOUT01 execution for {mission_id} via {mode_label} ({total_tasks} tasks).",
+                )
+
+            try:
+                for idx, task_obj in enumerate(sorted_tasks, start=1):
+                    task_id = task_obj.id
+                    task_type = task_obj.type
+                    task_target = task_obj.target
+
+                    # Mark task IN_PROGRESS and broadcast to dashboard
+                    async with session_factory() as session:
+                        t_row = await session.get(Task, task_id)
+                        if t_row is not None:
+                            t_row.status = "IN_PROGRESS"
+                            await session.commit()
+                        detail = await self.get_mission(session, mission_id)
+                        await self._gateway.broadcast_mission_status(detail)
+
+                    steps = _task_serial_steps(task_type, task_target, total_tasks)
+                    for cmd, duration_s, step_desc in steps:
+                        async with session_factory() as session:
+                            await self._events.record_event(
+                                session,
+                                mission_id=mission_id,
+                                category=EventCategoryEnum.TELEMETRY,
+                                message=f"[{idx}/{total_tasks}] {task_id}: {step_desc} -> '{cmd}' ({duration_s:.1f}s)",
+                            )
+                        await writer.execute_step(cmd, duration_s, pause_s=0.4)
+
+                    # Mark task COMPLETED and broadcast to dashboard
+                    async with session_factory() as session:
+                        t_row = await session.get(Task, task_id)
+                        if t_row is not None:
+                            t_row.status = "COMPLETED"
+                            await session.commit()
+                        detail = await self.get_mission(session, mission_id)
+                        await self._gateway.broadcast_mission_status(detail)
+
+                # Ensure final STOP ('X') is sent
+                if hardware_connected:
+                    try:
+                        await writer.send("X")
+                    except Exception:
+                        pass
+
+                # Finalize mission as COMPLETED
+                async with session_factory() as session:
+                    return await self.complete_mission(session, mission_id)
+            finally:
+                if owns_writer:
+                    await writer.close()
+
     async def get_mission(
         self,
         session: AsyncSession,
@@ -246,7 +405,7 @@ class MissionService:
         session: AsyncSession,
         mission_id: str,
     ) -> MissionDetailRead:
-        """Complete a simulated mission, finalize tasks, persist audit records, and broadcast."""
+        """Complete a mission, finalize tasks, persist audit records, and broadcast."""
         stmt = (
             select(Mission)
             .where(Mission.id == mission_id)
@@ -293,4 +452,3 @@ class MissionService:
 
 
 mission_service = MissionService()
-

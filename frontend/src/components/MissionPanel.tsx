@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import {
   completeMission,
   createMission,
+  executeMission,
   fetchMission,
 } from "../api/client";
 import { useDashboardStore } from "../state/store";
@@ -13,6 +14,7 @@ export function MissionPanel(): React.JSX.Element {
   const { state, dispatch } = useDashboardStore();
   const [objectiveInput, setObjectiveInput] = useState<string>("");
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [isExecuting, setIsExecuting] = useState<boolean>(false);
   const [isCompleting, setIsCompleting] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -45,6 +47,28 @@ export function MissionPanel(): React.JSX.Element {
       );
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleExecuteMission = async (): Promise<void> => {
+    if (!state.activeMissionId) {
+      return;
+    }
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setIsExecuting(true);
+    try {
+      const executed = await executeMission(state.activeMissionId);
+      dispatch({ type: "SET_MISSION_DETAIL", payload: executed });
+      setSuccessMsg(
+        `Mission ${executed.id} executed on SCOUT01 and marked ${executed.status}.`,
+      );
+    } catch (err) {
+      setErrorMsg(
+        err instanceof Error ? err.message : "Mission execution on SCOUT01 failed.",
+      );
+    } finally {
+      setIsExecuting(false);
     }
   };
 
@@ -156,14 +180,26 @@ export function MissionPanel(): React.JSX.Element {
               role="note"
               aria-label="ULTRON planning and safety validation run on dispatch; simulated only"
             >
-              {"ULTRON PLANNING + SAFETY VALIDATION RUN ON DISPATCH // SIMULATED ONLY"}
+              {state.hardwareLockout
+                ? "ULTRON PLANNING + SAFETY VALIDATION RUN ON DISPATCH // SIMULATED ONLY"
+                : "ULTRON PLANNING + SAFETY VALIDATION // LIVE SERIAL EXECUTION ON SCOUT01"}
             </div>
-            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "6px", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                className="btn btn-primary"
+                style={{ fontSize: "10px", padding: "4px 8px" }}
+                disabled={isExecuting || isCompleting}
+                onClick={() => void handleExecuteMission()}
+                aria-label="Execute Mission on SCOUT01"
+              >
+                {isExecuting ? "EXECUTING ON ROVER..." : "EXECUTE ON SCOUT01"}
+              </button>
               <button
                 type="button"
                 className="btn btn-secondary"
                 style={{ fontSize: "10px", padding: "4px 8px" }}
-                disabled={isCompleting}
+                disabled={isCompleting || isExecuting}
                 onClick={() => void handleCompleteMission()}
                 aria-label="Complete Simulated Mission"
               >
@@ -257,7 +293,16 @@ export function MissionPanel(): React.JSX.Element {
                       {task.area ? ` // AREA: ${task.area}` : ""}
                     </span>
                   </div>
-                  <span className="task-status" style={{ background: "var(--status-nominal-muted)", color: "#7AAA8A" }}>
+                  <span
+                    className="task-status"
+                    style={{
+                      background:
+                        task.status === "IN_PROGRESS"
+                          ? "rgba(217, 155, 38, 0.2)"
+                          : "var(--status-nominal-muted)",
+                      color: task.status === "IN_PROGRESS" ? "#E8B04B" : "#7AAA8A",
+                    }}
+                  >
                     {task.status}
                   </span>
                 </div>
