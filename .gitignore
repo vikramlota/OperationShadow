@@ -60,3 +60,8 @@ htmlcov/
 aiml/
 .env
 __pycache__/
+
+# Environment and secret files
+.env
+.env.*
+!.env.example
