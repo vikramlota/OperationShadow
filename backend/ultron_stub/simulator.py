@@ -1,4 +1,4 @@
-"""Deterministic mock vehicle simulation for SCOUT01 and HAWK01.
+"""Deterministic mock vehicle simulation for SCOUT01 (with HAWK01 retained only for legacy simulator compatibility as simulated / roadmap, not integrated).
 
 Supports:
 - Configurable starting positions and battery levels

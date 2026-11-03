@@ -1,4 +1,4 @@
-"""Hawk01 Aerial Vehicle Hardware & Flight Controller Interface Layer (TRD v2.0 §9, §16, §26)."""
+"""HAWK01 Aerial Vehicle Hardware & Flight Controller Interface Layer (simulated / roadmap, not integrated; TRD v2.0 §9, §16, §26)."""
 
 from hardware.hawk.communication import HawkTelemetryClient
 from hardware.hawk.flight_interface import FlightControllerBridge

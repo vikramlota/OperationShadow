@@ -69,7 +69,7 @@ async def execute_mission_endpoint(
     request: Request,
     service: Annotated[MissionService, Depends(get_mission_service)],
 ) -> MissionDetailRead:
-    """Execute a mission's tasks on SCOUT01 over ESP32 serial and return the updated mission state."""
+    """Execute a mission's tasks on SCOUT01 (simulated dead-reckoning fallback by default; supervised ESP32 serial steps only when all four safety gates are cleared) and return the updated mission state."""
     session_factory = getattr(request.app.state, "session_factory", AsyncSessionLocal)
     simulator = getattr(request.app.state, "scout_control_simulator", None)
     serial_writer = getattr(simulator, "serial_writer", None) if simulator is not None else None

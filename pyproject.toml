@@ -1,7 +1,7 @@
 [project]
 name = "operation-shadow"
 version = "0.2.0"
-description = "Operation Shadow Multi-Vehicle Mission Control Workspace (ULTRON Agent, FastAPI C2, React Dashboard, Hardware)"
+description = "Operation Shadow Robotics Mission Control & Environmental Intelligence Workspace (ULTRON Agent, FastAPI Backend, React Operations Dashboard, SCOUT01 Hardware)"
 requires-python = ">=3.11"
 
 [tool.pytest.ini_options]

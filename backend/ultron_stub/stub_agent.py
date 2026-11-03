@@ -1,8 +1,9 @@
 """Minimal development stub implementation of UltronAgentPort.
 
-Maintains an in-memory World Model representation of SCOUT01, HAWK01, and
-recorded observations, and generates deterministic stub mission decompositions
-without implementing real ULTRON planning/replanning logic.
+Maintains an in-memory World Model representation of SCOUT01 (with HAWK01 retained
+only in type definitions as simulated / roadmap, not integrated) and recorded
+observations, and generates deterministic stub mission decompositions without
+implementing real ULTRON planning/replanning logic.
 """
 
 from __future__ import annotations
@@ -65,7 +66,7 @@ class StubUltronAgent(UltronAgentPort):
         objective: str,
         language: str = "English",
     ) -> SimulatedMissionPlanStub:
-        """Return a deterministic stub task assignment for SCOUT01 and HAWK01."""
+        """Return a deterministic stub task assignment for SCOUT01 (HAWK01 simulated / roadmap, not integrated)."""
         self._active_mission_id = mission_id
         scout_task = SimulatedTaskSpecStub(
             task_id=f"{mission_id}-T01",

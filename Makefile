@@ -1,16 +1,16 @@
 .PHONY: help install-frontend install-backend run-frontend run-backend test-frontend test-backend test-ultron test-architecture test-all
 
 help:
-	@echo "Operation Shadow — Multi-Vehicle C2 Mission Control"
+	@echo "Operation Shadow — Robotics Mission Control & Operations Console"
 	@echo ""
 	@echo "Frontend Commands (React + Vite + TypeScript):"
 	@echo "  make install-frontend   Install frontend dependencies"
-	@echo "  make run-frontend       Start React Tactical C2 Dashboard on http://localhost:5173"
+	@echo "  make run-frontend       Start React Operations Dashboard on http://localhost:5173"
 	@echo "  make test-frontend      Run frontend typecheck and Vitest test suite"
 	@echo ""
 	@echo "Backend & Agent Commands (FastAPI + ULTRON + SQLite):"
 	@echo "  make install-backend    Install backend Python dependencies"
-	@echo "  make run-backend        Start FastAPI C2 Server on http://localhost:8000"
+	@echo "  make run-backend        Start FastAPI Mission-Control Server on http://localhost:8000"
 	@echo "  make test-backend       Run backend pytest suite"
 	@echo "  make test-ultron        Run ULTRON agent unit & pipeline tests"
 	@echo ""

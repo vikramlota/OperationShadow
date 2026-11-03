@@ -1,4 +1,4 @@
-"""HAWK01 companion runtime entry point (TRD v2.0 §9, §26)."""
+"""HAWK01 companion runtime entry point (simulated / roadmap stub, not integrated; TRD v2.0 §9, §26)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from hardware.hawk.sensors import HawkSensorMonitor
 
 
 def main() -> None:
-    """Initialize HAWK01 companion link components under hardware lockout defaults."""
+    """Initialize HAWK01 companion link stub components under hardware lockout defaults."""
     _bridge = FlightControllerBridge()
     _sensors = HawkSensorMonitor()
     _client = HawkTelemetryClient()

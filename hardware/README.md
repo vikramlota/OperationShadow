@@ -11,11 +11,11 @@ hardware/
 │   ├── sensors/              # Sensor fusion (IMU, ToF, ultrasonic, temp, gas, camera)
 │   ├── communication/        # Authenticated WebSocket client & ESP32 UART bridge
 │   └── main.py               # SCOUT Pi entry point
-├── hawk/                     # HAWK01 Aerial Drone System (Companion Link & FC, TRD §9, §16)
-│   ├── flight_interface/     # Fixed hover-point & waypoint Flight Controller wrapper
-│   ├── sensors/              # IMU, barometer & critical battery RTL monitor
-│   ├── communication/        # Authenticated WebSocket telemetry & command client
-│   └── main.py               # HAWK companion entry point
+├── hawk/                     # HAWK01 Aerial Drone System (simulated / roadmap, not integrated; TRD §9, §16)
+│   ├── flight_interface/     # Fixed hover-point & waypoint Flight Controller wrapper (simulated / roadmap)
+│   ├── sensors/              # IMU, barometer & critical battery RTL monitor (simulated / roadmap)
+│   ├── communication/        # Authenticated WebSocket telemetry & command client (simulated / roadmap)
+│   └── main.py               # HAWK companion entry point (simulated / roadmap stub)
 └── firmware/                 # SCOUT01 Low-Level Hardware Firmware (TRD §8, §26)
     └── esp32/
         ├── motors/           # PWM motor controller & emergency cutoff
@@ -25,7 +25,7 @@ hardware/
 ```
 
 ## Safety Invariant
-Real hardware (`mode = "real"`) remains locked out under `SHADOW_HARDWARE_LOCKOUT=true` until TRD v2.0 §7 command schemas and hardware failsafes are validated. All standard benchmarks run using simulated vehicles against the FastAPI C2 backend.
+Real hardware (`mode = "real"`) remains locked out under `SHADOW_HARDWARE_LOCKOUT=true` until TRD v2.0 §7 command schemas and hardware failsafes are validated. All standard benchmarks run using simulated vehicles against the FastAPI mission-control backend.
 
 ## ESP32 Transmitter Integration Status
 The working ESP-NOW transmitter sketch provided by the hardware team reads individual serial characters at 115200 baud. It accepts `W`, `A`, `S`, `D`, and `X` (case-insensitive) with no newline, and `X` sets the motor packet to zero. The backend serial writer follows this exact one-byte contract. The separate `scout/communication/serial_bridge.py` remains a provisional companion-to-drivetrain frame (`M,left,right\n`) and must not be used for this transmitter.

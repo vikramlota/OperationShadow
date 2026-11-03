@@ -1,4 +1,4 @@
-"""Flight controller wrapper for HAWK01 fixed hover-point and waypoint execution (TRD v2.0 §9, §16)."""
+"""Flight controller wrapper for HAWK01 fixed hover-point and waypoint execution (simulated / roadmap stub, not integrated; TRD v2.0 §9, §16)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class HoverWaypoint:
-    """Pre-configured indoor hover coordinate within the venue geofence."""
+    """Pre-configured indoor hover coordinate within the venue geofence (simulated / roadmap)."""
 
     name: str
     x: float
@@ -16,7 +16,7 @@ class HoverWaypoint:
 
 
 class FlightControllerBridge:
-    """Deterministic bridge to onboard flight controller firmware (e.g., ArduPilot/Betaflight)."""
+    """Simulated / roadmap bridge stub to onboard flight controller firmware (not integrated in active runtime)."""
 
     def __init__(self, max_altitude_m: float = 5.0, min_battery_pct: float = 20.0) -> None:
         self.max_altitude_m = max_altitude_m
