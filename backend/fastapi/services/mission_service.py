@@ -1146,6 +1146,18 @@ class MissionService:
                         before_snap.get("snapshot_id") if before_snap else None
                     ),
                     "after_snapshot_id": after_snap.get("snapshot_id"),
+                    "source_event_id": dec_ctx.get("event_id")
+                    or after_snap.get("associated_event_id"),
+                    "standing_order_id": dec_ctx.get("standing_order_id"),
+                    "triage_disposition": dec_ctx.get("triage_disposition"),
+                    "planner_source": dec_ctx.get("planner_source"),
+                    "validation_passed": bool(
+                        dec_ctx.get("validation_passed", True)
+                    ),
+                    "validation_errors": list(
+                        dec_ctx.get("validation_errors", [])
+                    ),
+                    "evidence_ids": list(dec_ctx.get("evidence_ids", [])),
                     "resulting_task_ids": list(rt_read.resulting_task_ids),
                     "before_state": (
                         self._summarize_snapshot_state(before_snap)

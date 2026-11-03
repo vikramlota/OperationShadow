@@ -212,7 +212,7 @@ class UltronLangGraphAgent(UltronAgentPort):
             else StandingOrderRegistry.from_json_file()
         )
         self.event_router: EventRouter = EventRouter(
-            dedup_window_sec=max(0.0, float(replan_debounce_sec)),
+            dedup_window_sec=max(1.5, float(replan_debounce_sec)),
             standing_order_matcher=self.standing_orders.has_potential_match,
         )
         self._routed_outcomes: Deque[RoutedEventOutcome] = deque(maxlen=200)

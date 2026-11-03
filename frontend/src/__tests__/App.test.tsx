@@ -1395,5 +1395,325 @@ describe("Operation Shadow Milestone 5 & 6 Tactical Command Dashboard", () => {
       /OBS-CAM-001/i,
     );
   });
+
+  // 16. Phase 3 Replay before/after historical snapshot states & unavailable indicator
+  it("renders Phase 3 before/after World Model snapshots on replay entries and clearly marks unavailable historical state", async () => {
+    vi.spyOn(apiClient, "fetchMissionReplay").mockResolvedValueOnce({
+      mission_id: "M-PH3",
+      entries: [
+        {
+          entry_type: "event",
+          timestamp: "2026-10-30T14:00:00Z",
+          event: {
+            id: "M-PH3-EVT01",
+            mission_id: "M-PH3",
+            timestamp: "2026-10-30T14:00:00Z",
+            category: "MISSION",
+            message: "Legacy event without persisted snapshot",
+          },
+          reasoning_trace: null,
+          world_model_snapshot: {
+            historical_state_available: false,
+            availability_note:
+              "Historical state unavailable: no snapshot was recorded at the time of this event.",
+            event_category: "MISSION",
+            severity: "INFO",
+            source: "mission_lifecycle",
+            source_mode: "simulated",
+            evidence_ids: [],
+          },
+        },
+        {
+          entry_type: "reasoning_trace",
+          timestamp: "2026-10-30T14:00:02Z",
+          event: null,
+          reasoning_trace: {
+            id: "M-PH3-RT01",
+            mission_id: "M-PH3",
+            timestamp: "2026-10-30T14:00:02Z",
+            trigger: "Standing Order SO-03-BLOCKED-ROUTE",
+            rationale:
+              "USED CACHED PLAN: Standing Order hold due to chair in oak_rgb_camera_optical_frame",
+            resulting_task_ids: ["M-PH3-T02"],
+          },
+          world_model_snapshot: {
+            historical_state_available: true,
+            availability_note:
+              "Genuine persisted historical World Model snapshot(s) attached.",
+            before_snapshot_id: "SNAP-BEFORE-01",
+            after_snapshot_id: "SNAP-AFTER-01",
+            standing_order_id: "SO-03-BLOCKED-ROUTE",
+            triage_disposition: "APPLY_STANDING_ORDER",
+            planner_source: "standing_order",
+            validation_passed: true,
+            validation_errors: [],
+            evidence_ids: ["OBS-CAM-001", "OBJ-001"],
+            resulting_task_ids: ["M-PH3-T02"],
+            task_changes: {
+              before_task_ids: ["M-PH3-T01"],
+              after_task_ids: ["M-PH3-T02"],
+              added_task_ids: ["M-PH3-T02"],
+              removed_task_ids: ["M-PH3-T01"],
+            },
+            before_state: {
+              snapshot_id: "SNAP-BEFORE-01",
+              mission_status: "IN_PROGRESS",
+              active_tasks: [
+                {
+                  id: "M-PH3-T01",
+                  vehicle: "SCOUT01",
+                  type: "PATROL",
+                  status: "ASSIGNED",
+                },
+              ],
+              vehicles: {
+                SCOUT01: {
+                  mode: "simulated",
+                  status: "ACTIVE",
+                  battery: 88.0,
+                  position: { x: 1.5, y: 2.0 },
+                },
+              },
+              tracked_objects: {},
+              hazards: [],
+            },
+            after_state: {
+              snapshot_id: "SNAP-AFTER-01",
+              mission_status: "IN_PROGRESS",
+              active_tasks: [
+                {
+                  id: "M-PH3-T02",
+                  vehicle: "SCOUT01",
+                  type: "STOP",
+                  status: "ASSIGNED",
+                },
+              ],
+              vehicles: {
+                SCOUT01: {
+                  mode: "simulated",
+                  status: "ACTIVE",
+                  battery: 87.9,
+                  position: { x: 1.5, y: 2.0 },
+                },
+              },
+              tracked_objects: {
+                "OBJ-001": { label: "chair" },
+              },
+              hazards: [],
+            },
+          },
+        },
+      ],
+    });
+
+    render(
+      <DashboardProvider>
+        <App enableWebSocket={false} />
+      </DashboardProvider>,
+    );
+
+    fireEvent.change(screen.getByLabelText("Replay Mission ID"), {
+      target: { value: "M-PH3" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Load Mission Replay" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/M-PH3 \/\/ 2 ENTRIES/i)).toBeInTheDocument();
+    });
+
+    // Entry 0: historical_state_available = false
+    expect(screen.getByTestId("replay-availability-badge")).toHaveTextContent(
+      /HISTORICAL STATE UNAVAILABLE/i,
+    );
+    expect(
+      screen.getByText(/no snapshot was recorded at the time of this event/i),
+    ).toBeInTheDocument();
+
+    // Select Entry 1: reasoning trace with BEFORE and AFTER state
+    const options = screen.getAllByRole("option");
+    fireEvent.click(options[1]);
+
+    expect(screen.getByTestId("replay-availability-badge")).toHaveTextContent(
+      /HISTORICAL STATE RECORDED/i,
+    );
+    expect(screen.getByTestId("replay-before-state")).toHaveTextContent(
+      /SNAP-BEFORE-01/i,
+    );
+    expect(screen.getByTestId("replay-after-state")).toHaveTextContent(
+      /SNAP-AFTER-01/i,
+    );
+    expect(screen.getByTestId("replay-selected-detail")).toHaveTextContent(
+      /SO-03-BLOCKED-ROUTE/i,
+    );
+  });
+
+  // 17. Phase 3 After-Action Mission Report loading, simulated labeling, Markdown/JSON export, and error handling
+  it("loads the After-Action Mission Report, clearly labels simulated execution, exports Markdown/JSON, and surfaces API errors cleanly", async () => {
+    const sampleReport: apiClient.MissionReportPayload = {
+      mission_id: "M009",
+      generated_at: "2026-10-30T15:00:00Z",
+      report_deterministic: true,
+      llm_used_for_report: false,
+      historical_snapshots_count: 4,
+      historical_state_available: true,
+      summary_text: "Deterministic After-Action Report for M009.",
+      overview: {
+        mission_id: "M009",
+        objective: "Sweep Sector Alpha and report obstacles",
+        created_at: "2026-10-30T14:55:00Z",
+        completed_at: "2026-10-30T15:00:00Z",
+        duration_seconds: 300.0,
+        final_status: "COMPLETED",
+        vehicle_mode: "simulated",
+        is_simulated_execution: true,
+        hardware_lockout_active: true,
+        execution_provenance:
+          "SIMULATED EXECUTION ONLY (SHADOW_HARDWARE_LOCKOUT=true; no physical rover actuation occurred)",
+      },
+      task_summary: {
+        total_tasks: 2,
+        completed_tasks: 1,
+        pending_tasks: 0,
+        assigned_tasks: 0,
+        in_progress_tasks: 0,
+        failed_tasks: 0,
+        cancelled_tasks: 1,
+        tasks: [
+          {
+            task_id: "M009-T01",
+            vehicle_id: "SCOUT01",
+            task_type: "PATROL",
+            area: "SECTOR_A",
+            target: "Sector Alpha",
+            priority: 1,
+            status: "COMPLETED",
+            highest_evidence_stage: "SIMULATED_COMPLETED",
+            is_simulated: true,
+            source_trace_ids: ["M009-RT01"],
+            provenance_note: "Completed in simulation.",
+          },
+        ],
+      },
+      environmental_findings: {
+        detected_objects: [],
+        identified_targets: [],
+        reported_hazards: [],
+        obstacles: [],
+        sensor_observations: [],
+        evidence_references: ["OBS-CAM-001"],
+        coordinate_frame_limitations: [
+          "All detections are camera-relative in oak_rgb_camera_optical_frame.",
+        ],
+        coverage_note: "1 observation recorded in Sector Alpha.",
+      },
+      decision_history: {
+        important_events: [],
+        standing_orders_applied: [],
+        llm_triage_outcomes: [],
+        replanning_operations: [],
+        rejected_decisions: [],
+        accepted_plans: [],
+        human_escalation_events: [],
+      },
+      vehicle_summary: {
+        vehicle_id: "SCOUT01",
+        vehicle_type: "ground",
+        mode: "simulated",
+        final_status: "IDLE",
+        final_connection: "CONNECTED",
+        connection_history: ["CONNECTED"],
+        battery_observations: {
+          min_battery: 88.0,
+          max_battery: 100.0,
+          final_battery: 88.0,
+          sample_count: 3,
+          critical_low_battery_observed: false,
+        },
+        task_participation_ids: ["M009-T01"],
+        communication_failures: [],
+        operational_limitations: ["Simulated mode only."],
+      },
+      safety_summary: {
+        emergency_stop_events: [],
+        safety_validation_failures: [],
+        critical_faults: [],
+        stop_dispatch_acknowledged_status:
+          "No Emergency Stop events occurred during this mission.",
+        unresolved_safety_issues: [],
+      },
+      unresolved_items: {
+        incomplete_tasks: ["M009-T02 (CANCELLED)"],
+        missing_observations: [],
+        stale_telemetry_or_observations: [],
+        conflicting_evidence: [],
+        unverified_sensor_signals: [],
+        unknown_outcomes: [],
+      },
+      markdown_export:
+        "# Operation Shadow — After-Action Mission Report (M009)\n\n- **Execution Provenance**: SIMULATED EXECUTION ONLY",
+    };
+
+    const reportSpy = vi
+      .spyOn(apiClient, "fetchMissionReport")
+      .mockResolvedValueOnce(sampleReport)
+      .mockRejectedValueOnce(
+        new apiClient.ApiClientError("Mission M404 was not found", 404, "NOT_FOUND"),
+      );
+
+    render(
+      <DashboardProvider>
+        <App enableWebSocket={false} />
+      </DashboardProvider>,
+    );
+
+    const reportInput = screen.getByLabelText("Report Mission ID");
+    fireEvent.change(reportInput, { target: { value: "M009" } });
+    fireEvent.click(screen.getByRole("button", { name: "Load Mission Report" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("mission-report-view")).toBeInTheDocument();
+    });
+    expect(reportSpy).toHaveBeenCalledWith("M009");
+    expect(screen.getByTestId("mission-report-exec-badge")).toHaveTextContent(
+      /SIMULATED EXECUTION ONLY/i,
+    );
+    expect(screen.getByTestId("mission-report-objective")).toHaveTextContent(
+      /Sweep Sector Alpha and report obstacles/i,
+    );
+    expect(screen.getByTestId("mission-report-task-stats")).toHaveTextContent(
+      /Total 2 \| Completed 1 \| Pending 0 \| Cancelled 1 \| Failed 0/i,
+    );
+    expect(screen.getByTestId("mission-report-unresolved")).toHaveTextContent(
+      /M009-T02 \(CANCELLED\)/i,
+    );
+
+    // Export Markdown
+    fireEvent.click(
+      screen.getByRole("button", { name: "Export Report Markdown" }),
+    );
+    expect(
+      screen.getByTestId("mission-report-export-content"),
+    ).toHaveTextContent(
+      /# Operation Shadow — After-Action Mission Report \(M009\)/i,
+    );
+
+    // Export JSON
+    fireEvent.click(screen.getByRole("button", { name: "Export Report JSON" }));
+    expect(
+      screen.getByTestId("mission-report-export-content"),
+    ).toHaveTextContent(/"mission_id": "M009"/i);
+
+    // Error state on nonexistent mission
+    fireEvent.change(reportInput, { target: { value: "M404" } });
+    fireEvent.click(screen.getByRole("button", { name: "Load Mission Report" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("mission-report-error")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("mission-report-error")).toHaveTextContent(
+      /Mission M404 was not found/i,
+    );
+    expect(screen.queryByTestId("mission-report-view")).not.toBeInTheDocument();
+  });
 });
 
