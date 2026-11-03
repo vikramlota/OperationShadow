@@ -1,0 +1,228 @@
+================================================================================
+                    FULL SYSTEM TEST - QUICK REFERENCE
+================================================================================
+
+SCENARIO: WiFi network changed - Need complete system verification
+         Including: ESP32, Backend, Frontend, Cameras
+
+TIME: ~30 minutes total
+
+================================================================================
+                              SETUP (2 minutes)
+================================================================================
+
+Terminal 1: Backend
+cd backend && source .venv/bin/activate && export $(cat ../.env | grep -v '^#' | xargs) && PYTHONPATH=fastapi:.:.. uvicorn main:app --reload
+
+Wait for: "Connected to SCOUT01 ESP32 serial on /dev/cu.usbserial-5C3D0844351"
+
+Terminal 2: Tests (see below)
+
+Terminal 3: Frontend
+cd frontend && npm run dev
+
+Browser:
+http://localhost:5173
+
+================================================================================
+                           LEVEL 1: ESP32 (5 min)
+================================================================================
+
+Command:
+python3 test_scout_simple.py
+
+Expected:
+- Connects to /dev/cu.usbserial-5C3D0844351
+- Sends: W, A, S, D, X
+- Scout executes all 8 movements
+- Completes without errors
+
+Check: Does Scout move?
+Yes ✓ → Continue to Level 2
+No ✗ → Check USB cable, verify port: ls /dev/cu.usb*
+
+================================================================================
+                         LEVEL 2: BACKEND (10 min)
+================================================================================
+
+Test 2A: Health Check
+curl http://localhost:8000/health | python3 -m json.tool
+
+Check: status = operational, hardware_lockout = false
+
+Test 2B: Scout Status
+curl http://localhost:8000/scout/control/status | python3 -m json.tool
+
+Check: transmitter_connected = true [CRITICAL]
+
+Test 2C: Movement (paste entire block)
+echo "Forward..."; curl -s -X POST http://localhost:8000/vehicle/SCOUT01/command -H "Content-Type: application/json" -d '{"command_type": "move", "direction": "forward", "duration_s": 0.5}' > /dev/null; sleep 1.5; echo "Left..."; curl -s -X POST http://localhost:8000/vehicle/SCOUT01/command -H "Content-Type: application/json" -d '{"command_type": "move", "direction": "left", "duration_s": 0.5}' > /dev/null; sleep 1.5; echo "Backward..."; curl -s -X POST http://localhost:8000/vehicle/SCOUT01/command -H "Content-Type: application/json" -d '{"command_type": "move", "direction": "backward", "duration_s": 0.5}' > /dev/null; sleep 1.5; echo "Right..."; curl -s -X POST http://localhost:8000/vehicle/SCOUT01/command -H "Content-Type: application/json" -d '{"command_type": "move", "direction": "right", "duration_s": 0.5}' > /dev/null; sleep 1.5; echo "Stop"; curl -s -X POST http://localhost:8000/vehicle/SCOUT01/command -H "Content-Type: application/json" -d '{"command_type": "stop"}' > /dev/null
+
+Check: Scout moves in sequence: Forward, Left, Backward, Right, Stop
+Yes ✓ → Continue to Level 3
+No ✗ → Check transmitter_connected, restart backend
+
+================================================================================
+                        LEVEL 3: CAMERA (3 min)
+================================================================================
+
+Step 1: Find Scout IP
+arp-scan -l | grep -i scout
+
+Look for: 10.68.44.41 (or similar)
+Note this IP!
+
+Step 2: Test Camera
+curl -I http://10.68.44.41:8081/stream.mjpg
+
+Check: HTTP/1.1 200 OK, Content-Type: multipart/x-mixed-replace
+Yes ✓ → Continue to Level 4
+No ✗ → Scout not on WiFi, check router connected devices
+
+================================================================================
+                       LEVEL 4: FRONTEND (10 min)
+================================================================================
+
+Step 1: Open Browser
+http://localhost:5173
+
+Check: Loads in <2 seconds
+
+Step 2: Verify Connection
+Look for: "REAL MODE" + "TRANSMITTER CONNECTED"
+Yes ✓ → Continue
+No ✗ → Hard refresh: Cmd+Shift+R, check Terminal 1 logs
+
+Step 3: Keyboard Test
+- Click Scout Control panel
+- Press W key
+- Scout moves immediately (not 2-3s delay)
+- Release W key
+- Scout stops immediately
+
+Check: No delay (<100ms)
+Yes ✓ → Continue
+No ✗ → Hard refresh, restart backend, check ROS_ENABLED=false
+
+Step 4: Camera Feed
+Look for: Camera Feed panel with live video
+Yes ✓ → Continue
+No ✗ → Verify Scout IP correct, refresh page
+
+Step 5: Mission Test
+- Enter: "Move forward and return"
+- Click: Create Mission
+- Wait 2-5s for ULTRON
+- Click: Execute Mission
+- Confirm: Yes
+- Watch Scout move (total ~5 seconds)
+
+Check: Scout executes mission smoothly
+Yes ✓ → ALL TESTS PASS!
+No ✗ → Check backend logs, verify serial connected
+
+================================================================================
+                          SUCCESS CHECKLIST
+================================================================================
+
+Level 1: ESP32
+[ ] Serial port found: /dev/cu.usbserial-5C3D0844351
+[ ] All commands work: W, A, S, D, X
+[ ] Scout moves correctly
+[ ] No errors
+
+Level 2: Backend
+[ ] Health check: operational
+[ ] transmitter_connected: true
+[ ] Movement via API works
+[ ] Scout responds to all commands
+
+Level 3: Camera
+[ ] Scout IP found on network
+[ ] Camera port 8081 accessible
+[ ] MJPEG stream responding
+[ ] Status: 200 OK
+
+Level 4: Frontend
+[ ] Frontend loads <2 seconds
+[ ] Shows "REAL MODE"
+[ ] Shows "TRANSMITTER CONNECTED"
+[ ] Keyboard controls instant (<100ms)
+[ ] Camera feed visible
+[ ] Mission creates
+[ ] Mission executes
+[ ] Scout follows mission
+[ ] All responsive
+
+================================================================================
+                        IF ANY TEST FAILS
+================================================================================
+
+Serial not found:
+  ls /dev/cu.usb*
+  Check USB cable
+
+transmitter_connected: false:
+  Restart backend
+  Check USB connection
+  Verify .env SERIAL_PORT correct
+
+Scout not on WiFi:
+  Power on Scout
+  Connect to same WiFi network
+  Check router settings
+
+Camera inaccessible:
+  Find Scout IP: arp-scan -l
+  Test: curl -I http://<IP>:8081/stream.mjpg
+  Update .env if IP changed
+
+Keyboard slow (2-3s):
+  Hard refresh: Cmd+Shift+R
+  Verify .env: ROS_ENABLED=false, LIDAR_ENABLED=false
+  Restart backend
+
+Mission fails:
+  Check Terminal 1 backend logs
+  Verify all Level 1-3 pass
+  Check serial connected
+
+================================================================================
+                        PERFORMANCE TARGETS
+================================================================================
+
+Frontend load:        <2 seconds
+Scout connection:     <1 second
+Keyboard latency:     <100ms (not 2-3s)
+Camera refresh:       Real-time (10-20fps)
+Mission execution:    Smooth, no stuttering
+E-Stop response:      <100ms
+
+================================================================================
+                         SUMMARY
+================================================================================
+
+If ALL tests pass → FULL SYSTEM OPERATIONAL ✓
+
+Test order:
+1. Level 1: ESP32 (5 min)
+2. Level 2: Backend (10 min)
+3. Level 3: Camera (3 min)
+4. Level 4: Frontend (10 min)
+
+Total time: ~30 minutes
+
+Next: Deployment ready!
+
+================================================================================
+                      FILES CREATED FOR YOU
+================================================================================
+
+FULL_SYSTEM_TEST.md           - Detailed copy-paste commands
+Complete Full-System Test Plan - 11-step detailed guide
+Executive Summary              - This quick reference
+test_scout_simple.py          - ESP32 test script (Level 1)
+
+Start with this file, then reference detailed guides as needed.
+
+================================================================================
