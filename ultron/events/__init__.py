@@ -1,12 +1,11 @@
-"""Event-driven intelligence layer for ULTRON (Phase 2).
+"""Phase 2 Event-Driven Intelligence Package for ULTRON."""
 
-Exports:
-- Event schemas (`UltronEvent`, `EventTypeEnum`, `EventSourceEnum`, `EventPriorityEnum`, `RoutedEventOutcome`)
-- Lightweight in-process `EventRouter`
-- Declarative `StandingOrderRegistry` and `StandingOrderConfigError`
-"""
-
-from ultron.events.router import EventRouter, compute_event_signature, map_event_to_db_category
+from ultron.events.router import (
+    EventRouter,
+    compute_event_signature,
+    generate_events_from_world_model,
+    map_event_to_db_category,
+)
 from ultron.events.schemas import (
     EventPriorityEnum,
     EventRouteTargetEnum,
@@ -14,13 +13,29 @@ from ultron.events.schemas import (
     EventTypeEnum,
     RoutedEventOutcome,
     UltronEvent,
+    default_priority_for_event_type,
     priority_rank,
 )
 from ultron.events.standing_orders import (
     StandingOrderConfigError,
     StandingOrderDefinition,
     StandingOrderExecutionResult,
+    StandingOrderPreconditions,
     StandingOrderRegistry,
+    StandingOrderResponseTemplate,
+    StandingOrdersConfigFile,
+    StandingOrderTaskSpec,
+)
+from ultron.events.triage import (
+    EventTriageResult,
+    TriageConfidenceEnum,
+    TriageDispositionEnum,
+    TriageOutcome,
+    TriageSeverityAssessmentEnum,
+    build_deterministic_triage_fallback,
+    build_triage_prompt,
+    invoke_event_triage,
+    validate_triage_result,
 )
 
 __all__ = [
@@ -28,14 +43,29 @@ __all__ = [
     "EventRouteTargetEnum",
     "EventRouter",
     "EventSourceEnum",
+    "EventTriageResult",
     "EventTypeEnum",
     "RoutedEventOutcome",
     "StandingOrderConfigError",
     "StandingOrderDefinition",
     "StandingOrderExecutionResult",
+    "StandingOrderPreconditions",
     "StandingOrderRegistry",
+    "StandingOrderResponseTemplate",
+    "StandingOrdersConfigFile",
+    "StandingOrderTaskSpec",
+    "TriageConfidenceEnum",
+    "TriageDispositionEnum",
+    "TriageOutcome",
+    "TriageSeverityAssessmentEnum",
     "UltronEvent",
+    "build_deterministic_triage_fallback",
+    "build_triage_prompt",
     "compute_event_signature",
+    "default_priority_for_event_type",
+    "generate_events_from_world_model",
+    "invoke_event_triage",
     "map_event_to_db_category",
     "priority_rank",
+    "validate_triage_result",
 ]

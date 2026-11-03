@@ -45,6 +45,7 @@ class UltronConfig(BaseModel):
     gemini_model: str = Field(default="gemini-2.5-flash")
     planning_timeout_sec: float = Field(default=10.0, gt=0.0)
     replanning_timeout_sec: float = Field(default=8.0, gt=0.0)
+    triage_timeout_sec: float = Field(default=3.0, gt=0.0)
     connect_timeout_sec: float = Field(default=3.0, gt=0.0)
     breaker_cooldown_sec: float = Field(default=30.0, ge=0.0)
     max_validation_retries: int = Field(default=3)
@@ -82,6 +83,7 @@ config = UltronConfig(
     gemini_model=os.getenv("SHADOW_LLM_MODEL", "gemini-2.5-flash"),
     planning_timeout_sec=_env_float("SHADOW_LLM_PLANNING_TIMEOUT_SEC", 10.0),
     replanning_timeout_sec=_env_float("SHADOW_LLM_REPLANNING_TIMEOUT_SEC", 8.0),
+    triage_timeout_sec=_env_float("SHADOW_LLM_TRIAGE_TIMEOUT_SEC", 3.0),
     connect_timeout_sec=_env_float("SHADOW_LLM_CONNECT_TIMEOUT_SEC", 3.0),
     breaker_cooldown_sec=_env_float("SHADOW_LLM_BREAKER_COOLDOWN_SEC", 30.0),
     hardware_lockout=_env_bool("SHADOW_HARDWARE_LOCKOUT", True),
