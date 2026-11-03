@@ -191,3 +191,37 @@ def test_connection_retry_when_budget_remains_and_error_classifications(
     assert classify_gemini_error(RuntimeError("HTTP 429 RESOURCE_EXHAUSTED")) == "http_429"
     assert classify_gemini_error(RuntimeError("503 Service Unavailable")) == "http_5xx"
     assert classify_gemini_error(ValueError("unexpected schema error")) == "other"
+
+
+def test_fallback_plan_preserves_arbitrary_objectives_and_passes_validator() -> None:
+    """Verify Workstream C: fallback plans built for 3 arbitrary objectives carry that objective and pass validate_plan."""
+    from ultron.planner.engine import build_evidence_grounded_plan
+    from ultron.safety.validator import validate_plan
+
+    arbitrary_objectives = [
+        "Respond to perimeter motion alert at north entrance and verify corridor status.",
+        "Standing Order Alpha: patrol loading bay after 22:00 and log any thermal anomalies.",
+        "Investigate acoustic trigger near storage locker 4 and hold position if obstructed.",
+    ]
+
+    for idx, custom_objective in enumerate(arbitrary_objectives, start=1):
+        mission_id = f"M-EVENT-{idx:02d}"
+        world = _build_test_world(mission_id)
+        world.mission.objective = custom_objective
+
+        # 1. Direct get_fallback_plan(mission_id, objective=custom_objective)
+        direct_plan = get_fallback_plan(mission_id, objective=custom_objective)
+        assert direct_plan.objective == custom_objective
+        assert "USED CACHED PLAN" in direct_plan.rationale
+        ok_direct, errs_direct = validate_plan(direct_plan, world)
+        assert ok_direct is True, f"Direct fallback failed validation for '{custom_objective}': {errs_direct}"
+        assert errs_direct == []
+
+        # 2. Evidence-grounded baseline fallback (build_evidence_grounded_plan) threads world.mission.objective
+        grounded_plan = build_evidence_grounded_plan(world)
+        assert grounded_plan.objective == custom_objective
+        assert "USED CACHED PLAN" in grounded_plan.rationale
+        ok_grounded, errs_grounded = validate_plan(grounded_plan, world)
+        assert ok_grounded is True, f"Grounded fallback failed validation for '{custom_objective}': {errs_grounded}"
+        assert errs_grounded == []
+

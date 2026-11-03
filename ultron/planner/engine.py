@@ -529,7 +529,10 @@ def build_evidence_grounded_plan(
         return validated
 
     # Default / baseline plan enriched with World Model evidence & unknowns
-    base = get_fallback_plan(world.mission.id or "M001")
+    base = get_fallback_plan(
+        world.mission.id or "M001",
+        objective=world.mission.objective or None,
+    )
     if trigger_rationale:
         base.rationale = f"USED CACHED PLAN — Replanned due to evidence trigger: {trigger_rationale}"
     base.facts_used = facts
