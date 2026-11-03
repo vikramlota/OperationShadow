@@ -40,7 +40,7 @@ async def test_health_endpoint_returns_expected_defaults() -> None:
     assert scout_status.status_code == 200
     assert scout_status.json() == {
         "scout_id": "SCOUT01",
-        "rosbridge_url": "ws://10.241.171.41:9090",
+        "rosbridge_url": "ws://192.0.2.41:9090",
         "enabled": False,
         "connected": False,
         "mode": "disabled",

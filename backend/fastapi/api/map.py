@@ -73,7 +73,7 @@ DEFAULT_PROVISIONAL_FLOOR_PLAN = FloorPlanConfigResponse(
     ],
     hawk_geofence=FloorPlanGeofenceSchema(
         id="GEOFENCE_HAWK01",
-        label="HAWK01 Indoor Flight Envelope (Provisional)",
+        label="HAWK01 Indoor Flight Envelope (Simulated / Roadmap, Not Integrated)",
         x=1.0,
         y=1.0,
         width=18.0,

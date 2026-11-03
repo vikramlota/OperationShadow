@@ -15,10 +15,10 @@ export const WS_SCOUT_CONTROL_URL: string =
 
 export const DEFAULT_SCOUT_STREAM_URL: string =
   import.meta.env.VITE_SCOUT01_STREAM_URL ??
-  "http://10.241.171.41:8081/stream.mjpg";
+  "http://192.0.2.41:8081/stream.mjpg";
 
 export const ROSBRIDGE_URL: string =
-  import.meta.env.VITE_ROSBRIDGE_URL ?? "ws://10.241.171.41:9090";
+  import.meta.env.VITE_ROSBRIDGE_URL ?? "ws://192.0.2.41:9090";
 
 export type VehicleId = "SCOUT01";
 export type EmergencyStopTarget = "ALL" | "SCOUT01";

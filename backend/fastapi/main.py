@@ -245,7 +245,7 @@ def create_app(
         client = get_rosbridge_client()
         configured_url = (
             (client.url if client is not None and client.url else build_rosbridge_url(settings))
-            or "ws://10.241.171.41:9090"
+            or "ws://192.0.2.41:9090"
         )
         return {
             "scout_id": settings.ros_vehicle_id or "SCOUT01",

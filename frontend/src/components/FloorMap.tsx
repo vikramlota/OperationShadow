@@ -123,7 +123,7 @@ const FALLBACK_SIMULATION_MAP: FloorPlanConfigPayload = {
   ],
   hawk_geofence: {
     id: "GEOFENCE_HAWK01",
-    label: "HAWK01 Flight Envelope (Provisional)",
+    label: "HAWK01 Flight Envelope (Simulated / Roadmap, Not Integrated)",
     x: 1,
     y: 1,
     width: 18,

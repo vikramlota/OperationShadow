@@ -59,7 +59,7 @@ A) **Enable keyboard control** (works even when DISCONNECTED):
 
 B) **Start ROS 2 telemetry** on SCOUT01:
    ```bash
-   ssh chawlaji@10.241.171.41
+   ssh <ROVER_USER>@<SCOUT_IP>
    ros2 topic pub /scout/odom nav_msgs/msg/Odometry "{}" --rate 1
    ```
    This will make vehicle show as ONLINE

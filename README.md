@@ -1,6 +1,6 @@
 # Operation Shadow
 
-Operation Shadow is a local, indoor multi-vehicle mission-control system coordinating two autonomous vehicles (`SCOUT01` ground rover and `HAWK01` indoor drone) with an in-process ULTRON agent adapter, a FastAPI + SQLite + WebSocket backend, a read-only ROSBridge perception subscriber (`/detections_json`), and a military tactical command-and-control React + TypeScript dashboard.
+Operation Shadow is a local, indoor multi-vehicle mission-control system coordinating two autonomous vehicles (`SCOUT01` ground rover and `HAWK01` indoor drone — simulated / roadmap, not integrated) with an in-process ULTRON agent adapter, a FastAPI + SQLite + WebSocket backend, a read-only ROSBridge perception subscriber (`/detections_json`), and a military tactical command-and-control React + TypeScript dashboard.
 
 ## Documentation
 
@@ -58,7 +58,7 @@ operation-shadow/
 │   │   ├── sensors/                       # Sensor fusion (IMU, ToF, ultrasonic, temp, gas, camera)
 │   │   ├── communication/                 # Authenticated WebSocket client & ESP32 UART bridge
 │   │   └── main.py                        # SCOUT Pi entry point
-│   ├── hawk/                              # HAWK01 Aerial Drone System (Companion Link & FC, TRD §9, §16)
+│   ├── hawk/                              # HAWK01 Aerial Drone System (simulated / roadmap, not integrated; TRD §9, §16)
 │   │   ├── flight_interface/              # Fixed hover-point & waypoint Flight Controller wrapper
 │   │   ├── sensors/                       # IMU, barometer & critical battery RTL monitor
 │   │   ├── communication/                 # Authenticated WebSocket telemetry & command client

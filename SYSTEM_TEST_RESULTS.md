@@ -1,6 +1,6 @@
 # Operation Shadow - System Test Results
 
-**Test Date**: $(date)
+**Test Date**: 2026-10-31
 **Status**: ✅ **OPERATIONAL** (with notes)
 
 ---
@@ -12,10 +12,10 @@
 | Backend API | ✅ PASS | Running on port 8000 |
 | ULTRON Agent | ✅ PASS | Real LangGraph agent active (not stub) |
 | Hardware Control | 🔒 LOCKED (Default) | Repository default is simulated mode with hardware lockout enabled (`SHADOW_HARDWARE_LOCKOUT=true`, `SHADOW_DEFAULT_VEHICLE_MODE=simulated`); local `.env` may differ and must be checked |
-| SCOUT01 Network | ✅ PASS | Reachable at 10.241.171.41 (~18ms latency) |
+| SCOUT01 Network | ✅ PASS | Reachable at `<SCOUT_IP>` (~18ms latency) |
 | Camera Stream | ✅ PASS | MJPEG streaming on port 8081 |
 | ROSBridge | ✅ PASS | WebSocket port 9090 open |
-| SSH Access | ⚠️ PARTIAL | Port open, credentials: chawlaji@10.241.171.41 |
+| SSH Access | ⚠️ PARTIAL | Port open, credentials: `<ROVER_USER>@<SCOUT_IP>` |
 | Mission Planning | ✅ PASS | ULTRON successfully creates missions |
 | API Documentation | ✅ PASS | Available at http://localhost:8000/docs |
 | Vehicle Commands | ⚠️ PARTIAL | Commands accepted but vehicle DISCONNECTED |
@@ -39,7 +39,7 @@ curl -X POST http://localhost:8000/mission \
 ```
 
 ### 2. Network Connectivity
-- SCOUT01 reachable at 10.241.171.41
+- SCOUT01 reachable at `<SCOUT_IP>`
 - Average latency: ~18ms
 - All required ports accessible:
   - 8081: Camera stream ✅
@@ -47,7 +47,7 @@ curl -X POST http://localhost:8000/mission \
   - 22: SSH ✅
 
 ### 3. Camera Stream
-- URL: http://10.241.171.41:8081/stream.mjpg
+- URL: `http://<SCOUT_IP>:8081/stream.mjpg`
 - Format: MJPEG (multipart/x-mixed-replace)
 - Status: Actively streaming
 - Can be viewed directly in browser or dashboard
@@ -72,7 +72,7 @@ curl -X POST http://localhost:8000/mission \
 1. Ensure ROS 2 nodes are running on SCOUT01
 2. Check that topics are being published:
    ```bash
-   ssh chawlaji@10.241.171.41
+   ssh <ROVER_USER>@<SCOUT_IP>
    ros2 topic list
    ros2 topic echo /scout/odom --once
    ```
@@ -87,12 +87,12 @@ curl -X POST http://localhost:8000/mission \
 
 **Problem**: Passwordless SSH not fully configured
 
-**Current Status**: SSH port 22 open, username `chawlaji` confirmed
+**Current Status**: SSH port 22 open, username `<ROVER_USER>` confirmed
 
 **Resolution** (if passwordless access needed):
 1. Copy SSH public key to SCOUT01:
    ```bash
-   ssh-copy-id chawlaji@10.241.171.41
+   ssh-copy-id <ROVER_USER>@<SCOUT_IP>
    ```
 2. Or manually add key to `~/.ssh/authorized_keys` on SCOUT01
 
@@ -140,10 +140,10 @@ curl http://localhost:8000/vehicle/SCOUT01/status
 ### View Camera Stream
 ```bash
 # In browser:
-http://10.241.171.41:8081/stream.mjpg
+http://<SCOUT_IP>:8081/stream.mjpg
 
 # Or test with curl:
-curl http://10.241.171.41:8081/stream.mjpg | head -c 1000
+curl http://<SCOUT_IP>:8081/stream.mjpg | head -c 1000
 ```
 
 ---
@@ -154,7 +154,7 @@ curl http://10.241.171.41:8081/stream.mjpg | head -c 1000
 
 **On SCOUT01** (via SSH):
 ```bash
-ssh chawlaji@10.241.171.41
+ssh <ROVER_USER>@<SCOUT_IP>
 
 # Check what ROS 2 nodes are running
 ros2 node list
@@ -173,7 +173,7 @@ ros2 topic echo /scout/battery --once
 ### 2. Start Frontend Dashboard
 
 ```bash
-cd "/home/vikram/Projects/Project CU/frontend"
+cd "<REPO_ROOT>/frontend"
 npm run dev
 ```
 
@@ -220,8 +220,8 @@ curl "http://localhost:8000/mission/$MISSION_ID"
 - **API Documentation**: http://localhost:8000/docs
 - **Health Check**: http://localhost:8000/health
 - **Frontend Dashboard**: http://localhost:5173 (after starting)
-- **SCOUT01 Camera**: http://10.241.171.41:8081/stream.mjpg
-- **SCOUT01 SSH**: `ssh chawlaji@10.241.171.41`
+- **SCOUT01 Camera**: `http://<SCOUT_IP>:8081/stream.mjpg`
+- **SCOUT01 SSH**: `ssh <ROVER_USER>@<SCOUT_IP>`
 
 ---
 
@@ -232,7 +232,7 @@ curl "http://localhost:8000/mission/$MISSION_ID"
 3. **Start Slow**: Use low speeds (0.1-0.3 m/s) for initial tests
 4. **Monitor Constantly**: Watch SCOUT01 during autonomous operation
 5. **Software E-Stop**: Available at `POST /emergency-stop` (broadcasts STOP to all vehicles)
-6. **Network Dependency**: Control requires stable WiFi connection to 10.241.171.41
+6. **Network Dependency**: Control requires stable WiFi connection to `<SCOUT_IP>`
 
 ---
 
@@ -247,9 +247,9 @@ SHADOW_DEFAULT_VEHICLE_MODE=simulated
 SHADOW_SCOUT_SERIAL_ENABLED=false
 SHADOW_SCOUT_SERIAL_FAILSAFE_VERIFIED=false
 SHADOW_ROSBRIDGE_ENABLED=false
-SCOUT01_IP=10.241.171.41
-SCOUT01_CAMERA_URL=http://10.241.171.41:8081/stream.mjpg
-SCOUT01_ROSBRIDGE_WS=ws://10.241.171.41:9090
+SCOUT01_IP=<SCOUT_IP>
+SCOUT01_CAMERA_URL=http://<SCOUT_IP>:8081/stream.mjpg
+SCOUT01_ROSBRIDGE_WS=ws://<SCOUT_IP>:9090
 ```
 
 **ULTRON**:
@@ -268,4 +268,4 @@ Main requirement: Start ROS 2 telemetry publishing on SCOUT01 to establish vehic
 
 ---
 
-Generated: $(date)
+Generated: 2026-10-31

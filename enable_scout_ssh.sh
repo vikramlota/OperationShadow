@@ -1,13 +1,24 @@
 #!/bin/bash
 # Enable SSH on SCOUT01 - Run this script ON THE SCOUT01 ROVER
+# Usage: sudo LAPTOP_IP=<LAPTOP_IP> SCOUT_IP=<SCOUT_IP> bash enable_scout_ssh.sh [LAPTOP_IP] [SCOUT_IP]
 
 echo "=== SCOUT01 SSH Enablement Script ==="
 echo ""
 
+LAPTOP_IP="${1:-${LAPTOP_IP:-}}"
+SCOUT_IP="${2:-${SCOUT_IP:-<SCOUT_IP>}}"
+
 # Check if running with sudo
 if [ "$EUID" -ne 0 ]; then 
     echo "❌ This script needs sudo privileges."
-    echo "Run: sudo bash enable_scout_ssh.sh"
+    echo "Run: sudo bash enable_scout_ssh.sh <LAPTOP_IP> [SCOUT_IP]"
+    exit 1
+fi
+
+if [ -z "$LAPTOP_IP" ]; then
+    echo "❌ Missing control laptop IP."
+    echo "Usage: sudo bash enable_scout_ssh.sh <LAPTOP_IP> [SCOUT_IP]"
+    echo "   or: sudo LAPTOP_IP=<LAPTOP_IP> bash enable_scout_ssh.sh"
     exit 1
 fi
 
@@ -37,8 +48,8 @@ fi
 
 echo ""
 echo "4. Configuring firewall (UFW)..."
-echo "   Allowing SSH from control laptop: 10.241.171.76"
-ufw allow from 10.241.171.76 to any port 22 proto tcp
+echo "   Allowing SSH from control laptop: $LAPTOP_IP"
+ufw allow from "$LAPTOP_IP" to any port 22 proto tcp
 ufw reload
 
 echo ""
@@ -52,8 +63,8 @@ fi
 echo ""
 echo "=== Configuration Complete ==="
 echo ""
-echo "SSH should now be accessible from control laptop (10.241.171.76)"
+echo "SSH should now be accessible from control laptop ($LAPTOP_IP)"
 echo ""
 echo "Test from control laptop:"
-echo "  ssh $(whoami)@10.241.171.41"
+echo "  ssh <ROVER_USER>@$SCOUT_IP"
 echo ""

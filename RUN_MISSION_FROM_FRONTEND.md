@@ -170,7 +170,7 @@ print(f"\n✅ Mission {mission_id} executed!")
 
 **Run it**:
 ```bash
-cd "/home/vikram/Projects/Project CU/backend"
+cd "<REPO_ROOT>/backend"
 .venv/bin/python my_mission.py
 ```
 

@@ -1,7 +1,7 @@
 # AGENTS.md — Operation Shadow Development Guidelines
 
 ## 1. Project Overview & Source of Truth
-Operation Shadow is a local, indoor multi-vehicle (`SCOUT01` ground rover and `HAWK01` aerial drone) mission-control system.
+Operation Shadow is a local, indoor multi-vehicle (`SCOUT01` ground rover and `HAWK01` aerial drone — simulated / roadmap, not integrated) mission-control system.
 - **Primary Architecture Specification**: `docs/Operation Shadow — Backend & Frontend Architecture.md`
 - **Implementation Plan & Milestones**: `docs/implementation-plan.md`
 - **Assumptions & Unresolved External Specs**: `docs/assumptions.md`

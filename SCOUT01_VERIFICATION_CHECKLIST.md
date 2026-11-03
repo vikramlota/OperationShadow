@@ -1,6 +1,6 @@
 # SCOUT01 Verification Checklist
 
-Now that you have SSH access to SCOUT01 (`ssh vikram@10.241.171.41`), run these commands to verify the rover is ready for Operation Shadow integration.
+Now that you have SSH access to SCOUT01 (`ssh <ROVER_USER>@<SCOUT_IP>`), run these commands to verify the rover is ready for Operation Shadow integration.
 
 ---
 
@@ -71,7 +71,7 @@ curl -I http://localhost:8081/stream.mjpg
 
 ```bash
 # Verify SCOUT01 IP address
-ip addr show | grep "inet 10.241"
+ip addr show | grep "inet <SUBNET>"
 
 # Check firewall rules
 sudo ufw status
@@ -89,10 +89,10 @@ sudo netstat -tlnp | grep -E ':(8081|9090|22)'
 ls -l /dev/ttyUSB* /dev/ttyACM*
 
 # Check serial port permissions
-groups vikram  # Should include 'dialout' group
+groups <ROVER_USER>  # Should include 'dialout' group
 
 # Add user to dialout group if needed
-sudo usermod -a -G dialout vikram
+sudo usermod -a -G dialout <ROVER_USER>
 ```
 
 ---
@@ -197,7 +197,7 @@ After running these commands, you should see:
 ✅ **Camera stream running** (port 8081 listening, returns MJPEG data)
 ✅ **Topics exist**: `/scout/cmd_vel`, `/scout/odom`, `/scout/battery` (or similar)
 ✅ **Firewall allows** ports 8081, 9090, 22 from control laptop IP
-✅ **Network interface** shows 10.241.171.41
+✅ **Network interface** shows <SCOUT_IP>
 
 ---
 

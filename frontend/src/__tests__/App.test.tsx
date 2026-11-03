@@ -41,7 +41,7 @@ const DEFAULT_FLOOR_MAP: apiClient.FloorPlanConfigPayload = {
   waypoints: [{ id: "WP_BASE", label: "Base Station", x: 1.5, y: 1.5 }],
   hawk_geofence: {
     id: "GEOFENCE_HAWK01",
-    label: "HAWK01 Indoor Flight Envelope (Provisional)",
+    label: "HAWK01 Indoor Flight Envelope (Simulated / Roadmap, Not Integrated)",
     x: 1,
     y: 1,
     width: 18,
@@ -467,7 +467,7 @@ describe("Operation Shadow Milestone 5 & 6 Tactical Command Dashboard", () => {
     });
     const scoutStatusSpy = vi.spyOn(apiClient, "fetchScoutStatus").mockResolvedValue({
       scout_id: "SCOUT01",
-      rosbridge_url: "ws://10.241.171.41:9090",
+      rosbridge_url: "ws://192.0.2.41:9090",
       enabled: false,
       connected: false,
       mode: "disabled",
@@ -713,7 +713,7 @@ describe("Operation Shadow Milestone 5 & 6 Tactical Command Dashboard", () => {
     const img = screen.getByAltText("SCOUT01 direct MJPEG camera stream");
     expect(img).toHaveAttribute(
       "src",
-      "http://10.241.171.41:8081/stream.mjpg",
+      "http://192.0.2.41:8081/stream.mjpg",
     );
     expect(screen.getByText("DIRECT MJPEG")).toBeInTheDocument();
 

@@ -101,11 +101,11 @@ curl -X POST http://localhost:8000/mission \
   -H "Content-Type: application/json" \
   -d '{
     "objective": "Navigate to waypoint alpha and report status",
-    "assigned_vehicles": ["SCOUT01"]
+    "language": "English"
   }'
 
 # ULTRON will:
-# 1. Call Gemini API to generate plan
+# 1. Call Gemini API to generate plan (or fall back within timeout budget)
 # 2. Validate plan against safety constraints
 # 3. Assign tasks to SCOUT01
 # 4. Return mission ID and task breakdown
@@ -119,7 +119,7 @@ curl -X POST http://localhost:8000/mission \
 - Calls Gemini API for plan generation
 - Uses structured outputs (Pydantic schema)
 - Falls back to cached plan if API fails
-- **Current Issue**: SSL timeout (see bugfix we started earlier)
+- **Current Issue**: SSL timeout (see `.kiro/specs/ultron-gemini-ssl-timeout/bugfix.md`)
 
 ### 2. Safety Validator (`ultron/safety/validator.py`)
 - Checks battery levels
@@ -132,7 +132,7 @@ curl -X POST http://localhost:8000/mission \
 - Updates World Model
 - Marks hazards as handled
 
-### 4. Replanning Evaluator (`ultron/evaluator/triggers.py`)
+### 4. Replanning Evaluator (`ultron/replanner/triggers.py`)
 - Monitors environmental changes
 - Detects hazards, targets, battery events
 - Triggers replanning when needed
@@ -142,10 +142,9 @@ curl -X POST http://localhost:8000/mission \
 ## Known Issues
 
 ### ⚠️ Gemini API SSL Timeout
-- **Status**: Active (see error output from `python ultron/main.py`)
-- **Impact**: ULTRON falls back to cached plans
+- **Status**: Mitigated by bounded wall-clock timeout and circuit breaker (`ultron/planner/engine.py`)
+- **Impact**: ULTRON falls back to deterministic cached plans within `SHADOW_LLM_PLANNING_TIMEOUT_SEC` (10s default)
 - **Workaround**: System operates in degraded mode using pre-recorded plans
-- **Fix**: Bugfix workflow was started but paused per your request
 
 ### 🔒 Hardware Lockout & Simulated Mode Default
 - Hardware lockout is enabled by default (`SHADOW_HARDWARE_LOCKOUT=true`)
@@ -205,4 +204,4 @@ python ultron/main.py
 
 ---
 
-Generated: $(date)
+Generated: 2026-10-31

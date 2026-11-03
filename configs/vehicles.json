@@ -14,7 +14,8 @@
     },
     "HAWK01": {
       "type": "aerial",
-      "hardware_role": "Flight Controller + Companion Link",
+      "integration_status": "simulated / roadmap, not integrated",
+      "hardware_role": "Flight Controller + Companion Link (simulated / roadmap, not integrated)",
       "default_mode": "simulated",
       "heartbeat_interval_ms": 250,
       "heartbeat_timeout_ms": 1500,
