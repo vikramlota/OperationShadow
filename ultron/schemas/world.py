@@ -198,6 +198,15 @@ class DecisionTraceEntry(BaseModel):
     resulting_task_ids: List[str] = Field(default_factory=list)
     confidence_level: Literal["high", "medium", "low", "unavailable"] = "medium"
     is_simulated: bool = True
+    source_event_id: Optional[str] = None
+    event_type: Optional[str] = None
+    event_priority: Optional[str] = None
+    standing_order_id: Optional[str] = None
+    triage_disposition: Optional[str] = None
+    triage_trace_id: Optional[str] = None
+    before_snapshot_id: Optional[str] = None
+    after_snapshot_id: Optional[str] = None
+    planner_source: Optional[str] = None
 
 
 def _default_active_tasks() -> Dict[VehicleID, Optional[str]]:

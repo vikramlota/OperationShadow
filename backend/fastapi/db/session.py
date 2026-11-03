@@ -1,4 +1,4 @@
-"""Asynchronous SQLAlchemy 2.0 session, engine factory, and initialization lifecycle."""
+"""Asynchronous SQLAlchemy 2.0 session, engine factory, additive Phase 3 schema migration, and initialization lifecycle."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from core.config import settings
 from db.models import Base, Observation, Task, Vehicle
 from sqlalchemy import event, select, text, update
 from sqlalchemy.ext.asyncio import (
+    AsyncConnection,
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
@@ -70,6 +71,70 @@ DEFAULT_VEHICLES: tuple[dict[str, Any], ...] = (
 )
 
 
+async def ensure_phase3_schema_migrations(conn: AsyncConnection) -> None:
+    """Idempotently apply additive SQLite migrations and immutability triggers for Phase 3.
+
+    Never drops or alters existing mission data (`missions`, `tasks`, `vehicles`,
+    `observations`, `events`, `reasoning_trace`). Ensures pre-Phase-3 SQLite
+    databases gain the `mission_snapshots` table, indexes, and append-only trigger.
+    """
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS mission_snapshots (
+                id VARCHAR(64) NOT NULL PRIMARY KEY,
+                mission_id VARCHAR(64) NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+                sequence INTEGER NOT NULL DEFAULT 1 CHECK (sequence >= 1),
+                timestamp DATETIME NOT NULL,
+                trigger_type VARCHAR(64) NOT NULL,
+                trigger_reason TEXT NOT NULL,
+                phase VARCHAR(32) NOT NULL DEFAULT 'STATE_TRANSITION',
+                associated_event_id VARCHAR(64),
+                associated_trace_id VARCHAR(64),
+                paired_before_snapshot_id VARCHAR(64),
+                snapshot_payload JSON NOT NULL
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_mission_snapshots_mission_seq "
+            "ON mission_snapshots (mission_id, sequence)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_mission_snapshots_mission_ts "
+            "ON mission_snapshots (mission_id, timestamp)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_mission_snapshots_associated_event_id "
+            "ON mission_snapshots (associated_event_id)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_mission_snapshots_associated_trace_id "
+            "ON mission_snapshots (associated_trace_id)"
+        )
+    )
+    # Enforce append-only immutability at the SQLite database level as well
+    await conn.execute(
+        text(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_mission_snapshots_immutable
+            BEFORE UPDATE ON mission_snapshots
+            BEGIN
+                SELECT RAISE(ABORT, 'MissionSnapshot records are immutable and append-only');
+            END;
+            """
+        )
+    )
+
+
 async def seed_default_vehicles(session: AsyncSession) -> None:
     """Idempotently seed SCOUT01 and reset stale CONNECTED states on cold boot."""
     result = await session.execute(
@@ -124,10 +189,11 @@ async def init_db(
     *,
     seed_defaults: bool = True,
 ) -> None:
-    """Initialize registered metadata tables and optionally seed default vehicles."""
+    """Initialize registered metadata tables, run additive migrations, and optionally seed default vehicles."""
     active_engine = target_engine or engine
     async with active_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await ensure_phase3_schema_migrations(conn)
 
     if seed_defaults:
         factory = create_session_factory(active_engine)

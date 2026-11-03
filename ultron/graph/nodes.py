@@ -2,7 +2,7 @@ import time
 from typing import Literal
 import uuid
 from ultron.state import UltronState, UltronStateUpdate
-from ultron.planner.engine import invoke_gemini_planner
+from ultron.planner.engine import get_last_planner_outcome, invoke_gemini_planner
 from ultron.safety.validator import validate_plan
 from ultron.safety.repairs import build_repair_prompt
 from ultron.replanner.triggers import check_replanning_triggers
@@ -92,6 +92,13 @@ def node_assign(state: UltronState) -> UltronStateUpdate:
             if valid_plan.confidence in ("high", "medium", "low", "unavailable")
             else "medium"
         )
+        outcome = get_last_planner_outcome()
+        planner_src: str | None = None
+        if trigger_str.startswith("[STANDING_ORDER:"):
+            planner_src = "standing_order"
+        elif outcome is not None:
+            planner_src = f"{outcome.source}:{outcome.reason}"
+
         trace = DecisionTraceEntry(
             trace_id=f"DT-{uuid.uuid4().hex[:8].upper()}",
             mission_id=world.mission.id or "M001",
@@ -117,6 +124,7 @@ def node_assign(state: UltronState) -> UltronStateUpdate:
                 getattr(v.mode, "value", str(v.mode)) == "simulated"
                 for v in world.vehicles.values()
             ),
+            planner_source=planner_src,
         )
         world.environment.decision_traces.append(trace)
         if len(world.environment.decision_traces) > 100:
@@ -167,6 +175,7 @@ def node_degraded(state: UltronState) -> UltronStateUpdate:
         resulting_task_ids=[],
         confidence_level="low",
         is_simulated=True,
+        planner_source="safety_validator_rejected",
     )
     world.environment.decision_traces.append(trace)
     if len(world.environment.decision_traces) > 100:

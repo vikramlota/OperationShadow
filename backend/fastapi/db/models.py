@@ -1,4 +1,4 @@
-"""SQLAlchemy 2.0 ORM models for Operation Shadow (Architecture §6).
+"""SQLAlchemy 2.0 ORM models for Operation Shadow (Architecture §6 + Phase 3 Mission Memory).
 
 Implements the six documented entities and their relationships:
 - Mission (missions)
@@ -7,6 +7,8 @@ Implements the six documented entities and their relationships:
 - Observation (observations)
 - Event (events)
 - ReasoningTrace (reasoning_trace)
+Plus the Phase 3 append-only immutable snapshot store:
+- MissionSnapshot (mission_snapshots)
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import (
-     JSON,
+    JSON,
     CheckConstraint,
     DateTime,
     Float,
@@ -24,6 +26,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    event,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -76,6 +79,12 @@ class Mission(Base):
     )
     reasoning_traces: Mapped[list[ReasoningTrace]] = relationship(
         "ReasoningTrace",
+        back_populates="mission",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    snapshots: Mapped[list[MissionSnapshot]] = relationship(
+        "MissionSnapshot",
         back_populates="mission",
         cascade="all, delete-orphan",
         passive_deletes=True,
@@ -252,3 +261,67 @@ class ReasoningTrace(Base):
     )
 
     mission: Mapped[Mission] = relationship("Mission", back_populates="reasoning_traces")
+
+
+class MissionSnapshot(Base):
+    """Immutable append-only World Model snapshot entity (Phase 3 Mission Memory)."""
+
+    __tablename__ = "mission_snapshots"
+    __table_args__ = (
+        CheckConstraint("sequence >= 1", name="ck_mission_snapshots_sequence_positive"),
+        Index("ix_mission_snapshots_mission_seq", "mission_id", "sequence"),
+        Index("ix_mission_snapshots_mission_ts", "mission_id", "timestamp"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    mission_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("missions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        index=True,
+    )
+    trigger_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    trigger_reason: Mapped[str] = mapped_column(Text, nullable=False)
+    phase: Mapped[str] = mapped_column(String(32), nullable=False, default="STATE_TRANSITION")
+    associated_event_id: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        default=None,
+        index=True,
+    )
+    associated_trace_id: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        default=None,
+        index=True,
+    )
+    paired_before_snapshot_id: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        default=None,
+    )
+    snapshot_payload: Mapped[dict[str, Any]] = mapped_column(
+        JSON,
+        nullable=False,
+        default=dict,
+    )
+
+    mission: Mapped[Mission] = relationship("Mission", back_populates="snapshots")
+
+
+@event.listens_for(MissionSnapshot, "before_update")
+def _prevent_mission_snapshot_update(
+    _mapper: Any,
+    _connection: Any,
+    _target: MissionSnapshot,
+) -> None:
+    """Enforce immutability on persisted MissionSnapshot records at the ORM layer."""
+    msg = "MissionSnapshot records are immutable and append-only; updates are forbidden."
+    raise ValueError(msg)

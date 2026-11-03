@@ -1,30 +1,11 @@
-"""ULTRON LangGraph Agent Adapter for FastAPI backend (§2, §3, §4, §6, §7, §8 & Phase 2 Event Intelligence).
+"""ULTRON LangGraph Agent Adapter for FastAPI backend (§2, §3, §4, §6, §7, §8 + Phase 2 Event Intelligence + Phase 3 Mission Memory).
 
 Bridges FastAPI's `MissionService`, `VehicleService`, `EventService`, and `PerceptionService`
 to the in-process ULTRON Agent LangGraph state machine (`ultron.graph.workflow`),
 evidence-grounded `WorldModel`, `WorldModelTools`, multi-sensor fusion pipeline,
 Phase 2 `EventRouter`, `StandingOrderRegistry`, bounded `LLM Event Triage`,
-deterministic Safety Validator, and Gemini planning engine.
-
-Phase 1 + Phase 2 Reliability & Intelligence Architecture:
-- Sensor ingestion (`ingest_detection_frame_into_world_model` and `record_observation`)
-  is strictly decoupled from synchronous LLM calls so camera/sensor ingestion
-  completes in sub-millisecond time.
-- Validated observations, vehicle state transitions, and sensor health updates flow
-  through the in-process `EventRouter` (`ultron/events/router.py`), which enforces
-  schema validation, deterministic priority (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`),
-  content-signature time-bounded deduplication, and stale/out-of-order rejection.
-- Known operational situations (`VEHICLE_LOW_BATTERY`, `SENSOR_CONFLICT`,
-  route-blocking `OBSTACLE_DETECTED`, verified high-confidence `HAZARD_DETECTED`)
-  are evaluated first by deterministic `StandingOrderRegistry` policies
-  (`ultron/events/standing_orders.py`) without requiring an LLM call.
-- Ambiguous or context-dependent events are evaluated by a bounded asynchronous
-  LLM Event Triage worker (`ultron/events/triage.py`, max 1 in-flight triage call,
-  fenced by `mission_epoch` and cancelled immediately on Emergency Stop).
-- All Standing Order plans and triage-triggered replans flow through the single
-  coalesced asynchronous replanning worker (`_replan_worker_loop`), preventing
-  duplicate replanning for the same event and preserving epoch fencing and E-Stop
-  independence.
+Phase 3 `MemoryStore` (`MissionMemorySnapshot`), deterministic Safety Validator,
+and Gemini planning engine.
 """
 
 from __future__ import annotations
@@ -33,13 +14,13 @@ import asyncio
 from collections import deque
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import heapq
 import logging
 from pathlib import Path
 import sys
 import time
-from typing import Any, Deque
+from typing import Any, Deque, Sequence
 import uuid
 
 # Ensure project root is available for imports
@@ -72,6 +53,15 @@ from ultron.events.triage import (
 )
 import ultron.graph.nodes as ultron_nodes
 from ultron.graph.workflow import build_ultron_graph
+from ultron.memory.store import (
+    MAX_SNAPSHOTS_PER_MISSION,
+    MemoryStore,
+    MissionMemorySnapshot,
+    SnapshotDecisionContext,
+    SnapshotPhaseEnum,
+    SnapshotTaskState,
+    SnapshotTriggerTypeEnum,
+)
 from ultron.planner.grounding import (
     answer_environmental_query,
 )
@@ -142,6 +132,12 @@ class _CoalescedReplanRequest:
     standing_order_plan: MissionPlan | None = None
     standing_order_id: str | None = None
     source_event_id: str | None = None
+    event_type: str | None = None
+    event_priority: str | None = None
+    event_source: str | None = None
+    event_source_mode: str | None = None
+    triage_disposition: str | None = None
+    triage_trace_id: str | None = None
 
 
 def _is_planner_mocked() -> bool:
@@ -157,7 +153,7 @@ def _is_planner_mocked() -> bool:
 
 
 class UltronLangGraphAgent(UltronAgentPort):
-    """In-process ULTRON Agent adapter driven by LangGraph, EventRouter, StandingOrders, LLM Triage, and WorldModel."""
+    """In-process ULTRON Agent adapter driven by LangGraph, EventRouter, StandingOrders, LLM Triage, MemoryStore, and WorldModel."""
 
     def __init__(
         self,
@@ -166,10 +162,12 @@ class UltronLangGraphAgent(UltronAgentPort):
         replan_debounce_sec: float = 0.5,
         replan_max_retries: int = 2,
         standing_orders_registry: StandingOrderRegistry | None = None,
+        max_snapshots_per_mission: int = MAX_SNAPSHOTS_PER_MISSION,
     ) -> None:
         self.app = build_ultron_graph()
         self._active_mission_id: str | None = None
         self._active_plan: MissionPlan | None = None
+        self._active_task_specs: list[SnapshotTaskState] = []
         self._world = WorldModel(
             mission=MissionState(
                 id="",
@@ -199,6 +197,13 @@ class UltronLangGraphAgent(UltronAgentPort):
         )
         self._observations: list[dict[str, Any]] = []
         self._unknown_transitions: list[tuple[VehicleId, datetime]] = []
+
+        # Phase 3: Persistent & In-Memory Mission Memory Store
+        self.memory_store: MemoryStore = MemoryStore(
+            max_snapshots_per_mission=max_snapshots_per_mission,
+        )
+        self._snapshot_persistence_failures_count: int = 0
+        self._snapshot_persistence_errors: list[str] = []
 
         # Phase 2: Standing Orders Registry & Centralized In-Process Event Router
         self.standing_orders: StandingOrderRegistry = (
@@ -251,6 +256,18 @@ class UltronLangGraphAgent(UltronAgentPort):
         return self._mission_epoch
 
     @property
+    def active_task_specs(self) -> list[SnapshotTaskState]:
+        return list(self._active_task_specs)
+
+    @property
+    def snapshot_persistence_failures_count(self) -> int:
+        return self._snapshot_persistence_failures_count
+
+    @property
+    def snapshot_persistence_errors(self) -> list[str]:
+        return list(self._snapshot_persistence_errors)
+
+    @property
     def has_active_replan(self) -> bool:
         replan_running = (
             self._active_replan_task is not None and not self._active_replan_task.done()
@@ -299,6 +316,55 @@ class UltronLangGraphAgent(UltronAgentPort):
         self,
     ) -> list[tuple[UltronEvent, EventTriageResult, TriageOutcome]]:
         return list(self._triage_outcomes)
+
+    def _environment_fingerprint(self) -> tuple[Any, ...]:
+        """Compute a fast structural fingerprint of meaningful environmental state."""
+        tracked_fp = tuple(
+            sorted(
+                (
+                    oid,
+                    obj.label,
+                    obj.epistemic_status.value,
+                    obj.tracking_status.value,
+                    obj.is_obstacle,
+                    obj.is_hazard,
+                    obj.corroborated_by_multiple_sensors,
+                )
+                for oid, obj in self._world.environment.tracked_objects.items()
+            )
+        )
+        hazards_fp = tuple(
+            sorted((h.id, h.type, h.epistemic_status.value) for h in self._world.environment.hazards)
+        )
+        obs_count = len(self._world.environment.known_obstacles)
+        return (tracked_fp, hazards_fp, obs_count)
+
+    def update_task_execution_states(
+        self,
+        tasks: Sequence[SnapshotTaskState | dict[str, Any]],
+        *,
+        trigger_reason: str | None = None,
+        timestamp: float | None = None,
+    ) -> MissionMemorySnapshot | None:
+        """Update tracked task states and optionally record a `TASK_STATE_TRANSITION` snapshot."""
+        updated: list[SnapshotTaskState] = []
+        for item in tasks:
+            if isinstance(item, SnapshotTaskState):
+                updated.append(item)
+            elif isinstance(item, dict):
+                updated.append(SnapshotTaskState.model_validate(item))
+        self._active_task_specs = updated
+        if trigger_reason and (self._world.mission.id or self._active_mission_id):
+            return self.memory_store.record_transition_snapshot(
+                self._world,
+                mission_id=self._world.mission.id or self._active_mission_id,
+                timestamp=timestamp,
+                trigger_type=SnapshotTriggerTypeEnum.TASK_STATE_TRANSITION,
+                trigger_reason=trigger_reason,
+                phase=SnapshotPhaseEnum.STATE_TRANSITION,
+                task_states=self._active_task_specs,
+            )
+        return None
 
     def cancel_pending_replanning(self, reason: str = "cancelled") -> None:
         """Invalidate pending event triage and replanning work and cancel any in-flight tasks."""
@@ -394,6 +460,34 @@ class UltronLangGraphAgent(UltronAgentPort):
             return REPLAN_PRIORITY_SIGNIFICANT
         return REPLAN_PRIORITY_ORDINARY
 
+    def _record_event_routed_snapshot(self, ev: UltronEvent) -> MissionMemorySnapshot:
+        """Record a `BEFORE` snapshot capturing what ULTRON knew when `ev` was accepted by `EventRouter`."""
+        ev_ts = (
+            ev.source_timestamp
+            if (ev.source_timestamp is not None and ev.source_timestamp > 0.0)
+            else ev.received_at
+        )
+        mid = ev.mission_id or self._world.mission.id or self._active_mission_id or "M001"
+        ev_ids = tuple(dict.fromkeys(list(ev.observation_ids) + list(ev.tracked_object_ids)))
+        return self.memory_store.record_transition_snapshot(
+            self._world,
+            mission_id=mid,
+            timestamp=ev_ts,
+            trigger_type=SnapshotTriggerTypeEnum.EVENT_ROUTED,
+            trigger_reason=f"Event {ev.event_id} ({ev.event_type.value}) routed: {ev.summary}",
+            phase=SnapshotPhaseEnum.BEFORE,
+            associated_event_id=ev.event_id,
+            task_states=self._active_task_specs,
+            decision_context=SnapshotDecisionContext(
+                event_id=ev.event_id,
+                event_type=ev.event_type.value,
+                event_priority=ev.priority.value if ev.priority else "MEDIUM",
+                event_source=ev.source.value,
+                event_source_mode=ev.source_mode.value,
+                evidence_ids=ev_ids,
+            ),
+        )
+
     def submit_event(
         self,
         raw_event: UltronEvent | dict[str, Any],
@@ -414,8 +508,9 @@ class UltronLangGraphAgent(UltronAgentPort):
 
         outcome = self.event_router.route_event(raw_event)
         self._routed_outcomes.append(outcome)
-        if outcome.accepted:
-            ev_ts = outcome.event.received_at if outcome.event is not None else time.time()
+        if outcome.accepted and outcome.event is not None:
+            self._record_event_routed_snapshot(outcome.event)
+            ev_ts = outcome.event.received_at
             self._dispatch_routed_events(now_ts=ev_ts)
         return outcome
 
@@ -441,6 +536,8 @@ class UltronLangGraphAgent(UltronAgentPort):
         event: UltronEvent,
         triage_res: EventTriageResult,
         triage_outcome: TriageOutcome,
+        *,
+        before_snapshot_id: str | None = None,
     ) -> DecisionTraceEntry:
         """Record an auditable `DecisionTraceEntry` in `WorldModel` for an LLM Event Triage evaluation."""
         obs_by_id = {
@@ -462,10 +559,17 @@ class UltronLangGraphAgent(UltronAgentPort):
                     )
                 )
 
+        ev_base_ts = (
+            event.source_timestamp
+            if (event.source_timestamp is not None and event.source_timestamp > 0.0)
+            else event.received_at
+        )
+        trace_ts = max(time.time(), ev_base_ts + 0.001)
+
         trace = DecisionTraceEntry(
             trace_id=f"DT-TRIAGE-{uuid.uuid4().hex[:8].upper()}",
             mission_id=self._world.mission.id or event.mission_id or "M001",
-            timestamp=max(time.time(), event.received_at + 0.001),
+            timestamp=trace_ts,
             trigger=f"EVENT_TRIAGE:{event.event_type.value}:{event.event_id}",
             environmental_facts_used=list(triage_res.facts_used),
             inferences_made=list(triage_res.inferences),
@@ -484,7 +588,46 @@ class UltronLangGraphAgent(UltronAgentPort):
             resulting_task_ids=[],
             confidence_level=triage_res.confidence.value,
             is_simulated=(event.source_mode == SensorSourceModeEnum.SIMULATED),
+            source_event_id=event.event_id,
+            event_type=event.event_type.value,
+            event_priority=event.priority.value if event.priority else "MEDIUM",
+            standing_order_id=triage_res.recommended_standing_order_id,
+            triage_disposition=triage_res.disposition.value,
+            before_snapshot_id=before_snapshot_id,
+            planner_source=f"triage:{triage_outcome.source}:{triage_outcome.reason}",
         )
+
+        after_snap = self.memory_store.record_transition_snapshot(
+            self._world,
+            mission_id=trace.mission_id,
+            timestamp=trace.timestamp,
+            trigger_type=SnapshotTriggerTypeEnum.LLM_TRIAGE_COMPLETED,
+            trigger_reason=trace.decision_summary,
+            phase=SnapshotPhaseEnum.AFTER,
+            associated_event_id=event.event_id,
+            associated_trace_id=trace.trace_id,
+            paired_before_snapshot_id=before_snapshot_id,
+            task_states=self._active_task_specs,
+            decision_context=SnapshotDecisionContext(
+                event_id=event.event_id,
+                event_type=event.event_type.value,
+                event_priority=event.priority.value if event.priority else "MEDIUM",
+                event_source=event.source.value,
+                event_source_mode=event.source_mode.value,
+                evidence_ids=tuple(triage_res.evidence_ids),
+                standing_order_id=triage_res.recommended_standing_order_id,
+                triage_disposition=triage_res.disposition.value,
+                triage_severity=triage_res.severity_assessment.value,
+                triage_source=triage_outcome.source,
+                planner_source=trace.planner_source,
+                validation_passed=not bool(triage_outcome.validation_repairs),
+                validation_errors=tuple(triage_outcome.validation_repairs),
+                resulting_task_ids=(),
+                rationale=triage_res.rationale,
+            ),
+        )
+        trace.after_snapshot_id = after_snap.snapshot_id
+
         self._world.environment.decision_traces.append(trace)
         if len(self._world.environment.decision_traces) > 100:
             self._world.environment.decision_traces = (
@@ -593,7 +736,15 @@ class UltronLangGraphAgent(UltronAgentPort):
 
                 self._triage_outcomes.append((event, triage_res, triage_outcome))
                 self._triage_completed_count += 1
-                self._record_triage_decision_trace(event, triage_res, triage_outcome)
+                before_snap_id = self.memory_store.get_before_snapshot_id_for_event(
+                    event.event_id
+                )
+                triage_trace = self._record_triage_decision_trace(
+                    event,
+                    triage_res,
+                    triage_outcome,
+                    before_snapshot_id=before_snap_id,
+                )
 
                 if triage_res.disposition == TriageDispositionEnum.APPLY_STANDING_ORDER:
                     so_res = self.standing_orders.evaluate_and_execute(
@@ -614,6 +765,12 @@ class UltronLangGraphAgent(UltronAgentPort):
                             standing_order_plan=so_res.plan,
                             standing_order_id=so_res.standing_order_id,
                             source_event_id=event.event_id,
+                            event_type=event.event_type.value,
+                            event_priority=event.priority.value if event.priority else "MEDIUM",
+                            event_source=event.source.value,
+                            event_source_mode=event.source_mode.value,
+                            triage_disposition=triage_res.disposition.value,
+                            triage_trace_id=triage_trace.trace_id,
                         )
                 elif triage_res.disposition == TriageDispositionEnum.REQUEST_REPLAN:
                     self._mark_event_entities_handled(event)
@@ -629,6 +786,12 @@ class UltronLangGraphAgent(UltronAgentPort):
                         priority=prio,
                         now_ts=time.time(),
                         source_event_id=event.event_id,
+                        event_type=event.event_type.value,
+                        event_priority=event.priority.value if event.priority else "MEDIUM",
+                        event_source=event.source.value,
+                        event_source_mode=event.source_mode.value,
+                        triage_disposition=triage_res.disposition.value,
+                        triage_trace_id=triage_trace.trace_id,
                     )
                 elif triage_res.disposition == TriageDispositionEnum.ESCALATE_TO_OPERATOR:
                     self._mark_event_entities_handled(event)
@@ -640,6 +803,12 @@ class UltronLangGraphAgent(UltronAgentPort):
                             priority=REPLAN_PRIORITY_SIGNIFICANT,
                             now_ts=time.time(),
                             source_event_id=event.event_id,
+                            event_type=event.event_type.value,
+                            event_priority=event.priority.value if event.priority else "MEDIUM",
+                            event_source=event.source.value,
+                            event_source_mode=event.source_mode.value,
+                            triage_disposition=triage_res.disposition.value,
+                            triage_trace_id=triage_trace.trace_id,
                         )
                 else:
                     # IGNORE or LOG_ONLY: mark associated entities handled so they do not re-trigger
@@ -676,10 +845,13 @@ class UltronLangGraphAgent(UltronAgentPort):
                         standing_order_plan=so_res.plan,
                         standing_order_id=so_res.standing_order_id,
                         source_event_id=event.event_id,
+                        event_type=event.event_type.value,
+                        event_priority=event.priority.value if event.priority else "HIGH",
+                        event_source=event.source.value,
+                        event_source_mode=event.source_mode.value,
                     )
                 elif so_res.status == "suppressed_already_handled":
                     self._mark_event_entities_handled(event)
-                    # If a replan is already pending for this epoch (e.g. burst frames), record coalescing
                     if (
                         self._pending_replan is not None
                         and self._pending_replan.mission_epoch == self._mission_epoch
@@ -696,7 +868,7 @@ class UltronLangGraphAgent(UltronAgentPort):
                 self._mark_event_entities_handled(event)
 
     def _route_and_schedule_world_events(self, *, now_ts: float) -> list[RoutedEventOutcome]:
-        """Extract candidate events from `self._world`, route via `EventRouter`, and dispatch handlers."""
+        """Extract candidate events from `self._world`, route via `EventRouter`, capture `BEFORE` snapshots, and dispatch handlers."""
         if self._emergency_stopped:
             return []
 
@@ -705,7 +877,9 @@ class UltronLangGraphAgent(UltronAgentPort):
         )
         for out in outcomes:
             self._routed_outcomes.append(out)
-            if (
+            if out.accepted and out.event is not None:
+                self._record_event_routed_snapshot(out.event)
+            elif (
                 not out.accepted
                 and out.status == "suppressed_duplicate"
                 and self._pending_replan is not None
@@ -748,6 +922,12 @@ class UltronLangGraphAgent(UltronAgentPort):
         standing_order_plan: MissionPlan | None = None,
         standing_order_id: str | None = None,
         source_event_id: str | None = None,
+        event_type: str | None = None,
+        event_priority: str | None = None,
+        event_source: str | None = None,
+        event_source_mode: str | None = None,
+        triage_disposition: str | None = None,
+        triage_trace_id: str | None = None,
     ) -> None:
         """Enqueue or coalesce an environmental replanning trigger without blocking ingestion."""
         if (
@@ -777,6 +957,18 @@ class UltronLangGraphAgent(UltronAgentPort):
                     self._pending_replan.standing_order_id = standing_order_id
                 if source_event_id is not None:
                     self._pending_replan.source_event_id = source_event_id
+                if event_type is not None:
+                    self._pending_replan.event_type = event_type
+                if event_priority is not None:
+                    self._pending_replan.event_priority = event_priority
+                if event_source is not None:
+                    self._pending_replan.event_source = event_source
+                if event_source_mode is not None:
+                    self._pending_replan.event_source_mode = event_source_mode
+                if triage_disposition is not None:
+                    self._pending_replan.triage_disposition = triage_disposition
+                if triage_trace_id is not None:
+                    self._pending_replan.triage_trace_id = triage_trace_id
         else:
             self._pending_replan = _CoalescedReplanRequest(
                 mission_id=mission_id,
@@ -789,6 +981,12 @@ class UltronLangGraphAgent(UltronAgentPort):
                 standing_order_plan=standing_order_plan,
                 standing_order_id=standing_order_id,
                 source_event_id=source_event_id,
+                event_type=event_type,
+                event_priority=event_priority,
+                event_source=event_source,
+                event_source_mode=event_source_mode,
+                triage_disposition=triage_disposition,
+                triage_trace_id=triage_trace_id,
             )
 
         self._ensure_replan_worker_started()
@@ -818,22 +1016,19 @@ class UltronLangGraphAgent(UltronAgentPort):
         return self.app.invoke(state)
 
     async def _replan_worker_loop(self) -> None:
-        """Background worker that processes coalesced replanning requests one at a time."""
+        """Background worker that processes coalesced replanning requests one at a time and captures before/after snapshots."""
         try:
             while self._pending_replan is not None and not self._emergency_stopped:
-                # Yield briefly so simultaneous multi-object detections in the same frame coalesce
                 await asyncio.sleep(0)
                 req = self._pending_replan
                 if req is None:
                     break
 
-                # Enforce cooldown for ordinary updates; significant updates (hazards/obstacles/standing orders) run immediately
                 if req.priority < REPLAN_PRIORITY_SIGNIFICANT and self._replan_cooldown_sec > 0.0:
                     elapsed_since_last = time.monotonic() - self._last_replan_finished_at
                     if elapsed_since_last < self._replan_cooldown_sec:
                         await asyncio.sleep(self._replan_cooldown_sec - elapsed_since_last)
 
-                # Re-fetch after potential sleep in case newer updates coalesced or E-Stop fired
                 req = self._pending_replan
                 self._pending_replan = None
                 if req is None:
@@ -847,6 +1042,32 @@ class UltronLangGraphAgent(UltronAgentPort):
                 ):
                     self._replan_discarded_stale_count += 1
                     break
+
+                # Ensure a BEFORE snapshot exists for this replan operation
+                before_snap_id = self.memory_store.get_before_snapshot_id_for_event(
+                    req.source_event_id
+                )
+                if before_snap_id is None:
+                    before_snap = self.memory_store.record_transition_snapshot(
+                        self._world,
+                        mission_id=req.mission_id,
+                        timestamp=req.first_requested_at,
+                        trigger_type=SnapshotTriggerTypeEnum.REPLAN_BEFORE,
+                        trigger_reason=f"Before replanning: {req.trigger_rationale}",
+                        phase=SnapshotPhaseEnum.BEFORE,
+                        associated_event_id=req.source_event_id,
+                        task_states=self._active_task_specs,
+                        decision_context=SnapshotDecisionContext(
+                            event_id=req.source_event_id,
+                            event_type=req.event_type,
+                            event_priority=req.event_priority,
+                            event_source=req.event_source,
+                            event_source_mode=req.event_source_mode,
+                            standing_order_id=req.standing_order_id,
+                            triage_disposition=req.triage_disposition,
+                        ),
+                    )
+                    before_snap_id = before_snap.snapshot_id
 
                 # Snapshot current world state so concurrent sensor ingestion never blocks or races
                 world_snapshot = self._world.model_copy(deep=True)
@@ -919,9 +1140,57 @@ class UltronLangGraphAgent(UltronAgentPort):
                 self._world.mission.status = res_world.mission.status
                 self._world.mission.tasks = res_world.mission.tasks
 
+                new_plan = res_state.get("proposed_plan")
+                self._active_plan = new_plan
+
+                scout_mode_sim = True
+                if scout_now is not None:
+                    scout_mode_sim = (
+                        getattr(scout_now.mode, "value", str(scout_now.mode)) == "simulated"
+                    )
+
+                if new_plan is not None:
+                    # Mark previous ASSIGNED tasks as CANCELLED / superseded and add new replanned tasks
+                    prev_completed_or_failed = [
+                        t
+                        for t in self._active_task_specs
+                        if t.status in ("COMPLETED", "FAILED", "CANCELLED")
+                    ]
+                    replanned_specs: list[SnapshotTaskState] = list(prev_completed_or_failed)
+                    for idx, t_item in enumerate(new_plan.tasks, start=1):
+                        veh_str = (
+                            t_item.vehicle.value
+                            if hasattr(t_item.vehicle, "value")
+                            else str(t_item.vehicle)
+                        )
+                        replanned_specs.append(
+                            SnapshotTaskState(
+                                task_id=t_item.id,
+                                vehicle_id=veh_str,
+                                task_type=t_item.type.upper(),
+                                area=t_item.area,
+                                target=t_item.target,
+                                priority=max(1, min(100, int(t_item.priority))),
+                                status="ASSIGNED",
+                                execution_stage="ASSIGNED",
+                                is_simulated=scout_mode_sim,
+                            )
+                        )
+                    self._active_task_specs = replanned_specs
+
+                new_traces: list[DecisionTraceEntry] = []
                 for dt in res_world.environment.decision_traces:
                     if dt.trace_id not in prev_trace_ids:
+                        dt.source_event_id = req.source_event_id
+                        dt.event_type = req.event_type
+                        dt.event_priority = req.event_priority
+                        dt.standing_order_id = req.standing_order_id
+                        dt.triage_disposition = req.triage_disposition
+                        dt.triage_trace_id = req.triage_trace_id
+                        dt.before_snapshot_id = before_snap_id
                         self._world.environment.decision_traces.append(dt)
+                        new_traces.append(dt)
+
                 if len(self._world.environment.decision_traces) > 100:
                     self._world.environment.decision_traces = (
                         self._world.environment.decision_traces[-100:]
@@ -938,7 +1207,67 @@ class UltronLangGraphAgent(UltronAgentPort):
                     if tid in snapshot_tracked_ids:
                         tobj.handled = True
 
-                self._active_plan = res_state.get("proposed_plan")
+                # Capture AFTER snapshot for the replan/Standing Order outcome
+                latest_dt = new_traces[-1] if new_traces else None
+                after_trig_type = (
+                    SnapshotTriggerTypeEnum.STANDING_ORDER_APPLIED
+                    if req.standing_order_id
+                    else (
+                        SnapshotTriggerTypeEnum.REPLAN_DEGRADED
+                        if self._world.mission.status == UltronMissionStatus.DEGRADED
+                        else SnapshotTriggerTypeEnum.REPLAN_ACCEPTED
+                    )
+                )
+                after_snap = self.memory_store.record_transition_snapshot(
+                    self._world,
+                    mission_id=req.mission_id,
+                    timestamp=(latest_dt.timestamp if latest_dt is not None else time.time()),
+                    trigger_type=after_trig_type,
+                    trigger_reason=(
+                        latest_dt.decision_summary
+                        if latest_dt is not None
+                        else req.trigger_rationale
+                    ),
+                    phase=SnapshotPhaseEnum.AFTER,
+                    associated_event_id=req.source_event_id,
+                    associated_trace_id=(latest_dt.trace_id if latest_dt is not None else None),
+                    paired_before_snapshot_id=before_snap_id,
+                    task_states=self._active_task_specs,
+                    decision_context=SnapshotDecisionContext(
+                        event_id=req.source_event_id,
+                        event_type=req.event_type,
+                        event_priority=req.event_priority,
+                        event_source=req.event_source,
+                        event_source_mode=req.event_source_mode,
+                        evidence_ids=(
+                            tuple(r.observation_id for r in latest_dt.evidence_references)
+                            if latest_dt is not None
+                            else ()
+                        ),
+                        standing_order_id=req.standing_order_id,
+                        triage_disposition=req.triage_disposition,
+                        planner_source=(
+                            latest_dt.planner_source if latest_dt is not None else None
+                        ),
+                        validation_passed=(
+                            latest_dt.safety_validator_passed if latest_dt is not None else True
+                        ),
+                        validation_errors=(
+                            tuple(latest_dt.validation_errors)
+                            if latest_dt is not None
+                            else ()
+                        ),
+                        resulting_task_ids=(
+                            tuple(latest_dt.resulting_task_ids)
+                            if latest_dt is not None
+                            else ()
+                        ),
+                        rationale=(latest_dt.rationale if latest_dt is not None else None),
+                    ),
+                )
+                if latest_dt is not None:
+                    latest_dt.after_snapshot_id = after_snap.snapshot_id
+
                 self._replan_completed_count += 1
         except asyncio.CancelledError:
             self._replan_discarded_stale_count += 1
@@ -952,23 +1281,31 @@ class UltronLangGraphAgent(UltronAgentPort):
         mission_id: str | None = None,
         broadcast: bool = True,
     ) -> tuple[list[Any], list[Any]]:
-        """Persist unsynced routed events and decision traces to `EventService` in chronological order."""
+        """Persist unsynced routed events, decision traces, replanned tasks, and mission snapshots to SQLite."""
+        from db.models import Task
+
         target_mission_id = mission_id or self._world.mission.id or self._active_mission_id
         if not target_mission_id:
             return [], []
 
         persisted_events: list[Any] = []
         persisted_traces: list[Any] = []
-        latest_event_dt: datetime | None = None
+        event_dt_by_id: dict[str, datetime] = {}
 
+        # 1. Sync routed events (preserving source_timestamp when present)
         for ev in self.event_router.history:
+            ev_ts_float = (
+                ev.source_timestamp
+                if (ev.source_timestamp is not None and ev.source_timestamp > 0.0)
+                else ev.received_at
+            )
+            ev_dt = datetime.fromtimestamp(ev_ts_float, tz=timezone.utc)
+            event_dt_by_id[ev.event_id] = ev_dt
+
             if ev.event_id in self._synced_event_ids:
                 continue
             if ev.mission_id and ev.mission_id != target_mission_id:
                 continue
-            ev_dt = datetime.fromtimestamp(ev.received_at, tz=timezone.utc)
-            if latest_event_dt is None or ev_dt > latest_event_dt:
-                latest_event_dt = ev_dt
             ev_read = await event_svc.record_event(
                 session,
                 mission_id=target_mission_id,
@@ -982,14 +1319,18 @@ class UltronLangGraphAgent(UltronAgentPort):
             self._synced_event_ids.add(ev.event_id)
             persisted_events.append(ev_read)
 
-        for idx, dt in enumerate(self._world.environment.decision_traces, start=1):
+        # 2. Sync decision traces (preserving true chronological timestamp relative to originating event)
+        for dt in self._world.environment.decision_traces:
             if dt.trace_id in self._synced_trace_ids:
                 continue
             if dt.mission_id and dt.mission_id != target_mission_id:
                 continue
-            trace_dt = datetime.fromtimestamp(dt.timestamp, tz=timezone.utc)
-            if latest_event_dt is not None and trace_dt <= latest_event_dt:
-                trace_dt = latest_event_dt + timedelta(milliseconds=idx)
+            trace_ts_float = dt.timestamp
+            if dt.source_event_id and dt.source_event_id in event_dt_by_id:
+                orig_ev_ts = event_dt_by_id[dt.source_event_id].timestamp()
+                if trace_ts_float < orig_ev_ts:
+                    trace_ts_float = orig_ev_ts + 0.001
+            trace_dt = datetime.fromtimestamp(trace_ts_float, tz=timezone.utc)
             rt_read = await event_svc.record_reasoning_trace(
                 session,
                 mission_id=target_mission_id,
@@ -1004,7 +1345,45 @@ class UltronLangGraphAgent(UltronAgentPort):
             self._synced_trace_ids.add(dt.trace_id)
             persisted_traces.append(rt_read)
 
-        if persisted_events or persisted_traces:
+        # 3. Sync replanned task rows into SQLite `tasks` table so `resulting_task_ids` are persisted
+        if self._world.mission.id == target_mission_id and self._active_task_specs:
+            for t_spec in self._active_task_specs:
+                existing_task = await session.get(Task, t_spec.task_id)
+                if existing_task is None:
+                    session.add(
+                        Task(
+                            id=t_spec.task_id,
+                            mission_id=target_mission_id,
+                            vehicle_id=t_spec.vehicle_id,
+                            type=t_spec.task_type,
+                            area=t_spec.area,
+                            target=t_spec.target,
+                            priority=t_spec.priority,
+                            status=t_spec.status,
+                        )
+                    )
+                await session.flush()
+
+        # 4. Sync immutable MissionMemorySnapshot records to SQLite (`mission_snapshots`)
+        unsynced_snaps = self.memory_store.get_unsynced_snapshots(target_mission_id)
+        snaps_persisted = 0
+        if hasattr(event_svc, "record_mission_snapshot"):
+            for snap in unsynced_snaps:
+                try:
+                    await event_svc.record_mission_snapshot(
+                        session,
+                        snap,
+                        commit=False,
+                    )
+                    self.memory_store.mark_snapshot_synced(snap.snapshot_id)
+                    snaps_persisted += 1
+                except Exception as exc:
+                    self._snapshot_persistence_failures_count += 1
+                    err_str = f"Snapshot {snap.snapshot_id} persistence failed: {exc}"
+                    self._snapshot_persistence_errors.append(err_str)
+                    logger.error(err_str)
+
+        if persisted_events or persisted_traces or snaps_persisted > 0:
             await session.commit()
 
         return persisted_events, persisted_traces
@@ -1069,19 +1448,33 @@ class UltronLangGraphAgent(UltronAgentPort):
         objective: str,
         language: str = "English",
     ) -> SimulatedMissionPlanStub:
-        """Generates structured task plan via ULTRON LangGraph workflow grounded in WorldModel."""
+        """Generates structured task plan via ULTRON LangGraph workflow grounded in WorldModel and records initial before/after snapshots."""
         # Invalidate any stale replanning or triage from a prior mission
         self.cancel_pending_replanning("new_mission_created")
         self.standing_orders.reset_execution_history()
         self._emergency_stopped = False
 
         self._active_mission_id = mission_id
+        self._active_task_specs = []
         self._world.mission = MissionState(
             id=mission_id,
             objective=objective,
             status=UltronMissionStatus.IN_PROGRESS,
         )
-        refresh_world_model_freshness(self._world)
+        now_ts = time.time()
+        refresh_world_model_freshness(self._world, current_time=now_ts)
+
+        # Capture BEFORE snapshot prior to initial planning
+        before_snap = self.memory_store.record_transition_snapshot(
+            self._world,
+            mission_id=mission_id,
+            timestamp=now_ts,
+            trigger_type=SnapshotTriggerTypeEnum.MISSION_CREATED,
+            trigger_reason=f"Mission {mission_id} created: {objective}",
+            phase=SnapshotPhaseEnum.BEFORE,
+            associated_event_id=f"{mission_id}-EVT01",
+            task_states=[],
+        )
 
         initial_state: UltronState = {
             "world": self._world,
@@ -1106,7 +1499,15 @@ class UltronLangGraphAgent(UltronAgentPort):
 
         self._active_plan = plan
 
+        scout_v = self._world.vehicles.get("SCOUT01")
+        is_sim_mode = (
+            getattr(scout_v.mode, "value", str(scout_v.mode)) == "simulated"
+            if scout_v is not None
+            else True
+        )
+
         specs: list[SimulatedTaskSpecStub] = []
+        snap_tasks: list[SnapshotTaskState] = []
         for idx, task in enumerate(plan.tasks, start=1):
             veh_str = (
                 task.vehicle.value
@@ -1125,6 +1526,68 @@ class UltronLangGraphAgent(UltronAgentPort):
                     status="ASSIGNED",
                 )
             )
+            snap_tasks.append(
+                SnapshotTaskState(
+                    task_id=scoped_id,
+                    vehicle_id=veh_str,
+                    task_type=task.type.upper(),
+                    area=task.area,
+                    target=task.target,
+                    priority=max(1, min(100, int(task.priority))),
+                    status="ASSIGNED",
+                    execution_stage="ASSIGNED",
+                    is_simulated=is_sim_mode,
+                )
+            )
+
+        self._active_task_specs = snap_tasks
+        if snap_tasks:
+            self._world.mission.tasks.active[VehicleID.SCOUT] = snap_tasks[0].task_id
+            self._world.mission.tasks.pending = [t.task_id for t in snap_tasks[1:]]
+
+        initial_dt = (
+            self._world.environment.decision_traces[-1]
+            if self._world.environment.decision_traces
+            else None
+        )
+        if initial_dt is not None:
+            initial_dt.resulting_task_ids = [s.task_id for s in specs]
+            initial_dt.source_event_id = f"{mission_id}-EVT01"
+            initial_dt.before_snapshot_id = before_snap.snapshot_id
+
+        after_snap = self.memory_store.record_transition_snapshot(
+            self._world,
+            mission_id=mission_id,
+            timestamp=time.time(),
+            trigger_type=SnapshotTriggerTypeEnum.INITIAL_PLAN_ACCEPTED,
+            trigger_reason=(
+                initial_dt.decision_summary
+                if initial_dt is not None
+                else f"Initial plan accepted for {mission_id}"
+            ),
+            phase=SnapshotPhaseEnum.AFTER,
+            associated_event_id=f"{mission_id}-EVT01",
+            associated_trace_id=f"{mission_id}-RT01",
+            paired_before_snapshot_id=before_snap.snapshot_id,
+            task_states=self._active_task_specs,
+            decision_context=SnapshotDecisionContext(
+                event_id=f"{mission_id}-EVT01",
+                event_type="MISSION_STATE_CHANGED",
+                event_priority="LOW",
+                event_source="mission_lifecycle",
+                event_source_mode="simulated" if is_sim_mode else "physical",
+                evidence_ids=tuple(plan.evidence_ids),
+                planner_source=(
+                    initial_dt.planner_source if initial_dt is not None else "fallback"
+                ),
+                validation_passed=True,
+                validation_errors=(),
+                resulting_task_ids=tuple(s.task_id for s in specs),
+                rationale=plan.rationale,
+            ),
+        )
+        if initial_dt is not None:
+            initial_dt.after_snapshot_id = after_snap.snapshot_id
 
         return SimulatedMissionPlanStub(
             mission_id=mission_id,
@@ -1149,16 +1612,40 @@ class UltronLangGraphAgent(UltronAgentPort):
         position_alt: float | None = None,
         last_heartbeat: datetime | None = None,
     ) -> None:
-        """Updates internal World Model state for the specified vehicle and routes state events."""
+        """Updates internal World Model state for the specified vehicle and routes state events.
+
+        Records a mission snapshot ONLY on meaningful vehicle state transitions
+        (connection change, critical status change such as EMERGENCY_STOPPED/FAULT,
+        mode change, or battery crossing below 20%) — never on routine heartbeats.
+        """
         v = self._world.vehicles.get(vehicle_id)
         if not v:
             return
+
+        prev_status = str(v.status)
+        prev_conn = v.connection
+        prev_mode = v.mode
+        prev_battery = float(v.battery)
+        now_ts = (
+            last_heartbeat.timestamp() if last_heartbeat is not None else time.time()
+        )
 
         if status is not None:
             if status == "EMERGENCY_STOPPED":
                 self._emergency_stopped = True
                 v.status = "EMERGENCY_STOPPED"
                 self.cancel_pending_replanning("emergency_stop")
+                active_mid = self._world.mission.id or self._active_mission_id
+                if active_mid and prev_status != "EMERGENCY_STOPPED":
+                    self.memory_store.record_transition_snapshot(
+                        self._world,
+                        mission_id=active_mid,
+                        timestamp=now_ts,
+                        trigger_type=SnapshotTriggerTypeEnum.EMERGENCY_STOP_TRIGGERED,
+                        trigger_reason=f"Vehicle {vehicle_id} transitioned to EMERGENCY_STOPPED.",
+                        phase=SnapshotPhaseEnum.STATE_TRANSITION,
+                        task_states=self._active_task_specs,
+                    )
                 return
             elif v.status != "EMERGENCY_STOPPED" or not self._emergency_stopped:
                 v.status = status
@@ -1189,6 +1676,37 @@ class UltronLangGraphAgent(UltronAgentPort):
         if last_heartbeat is not None:
             v.last_heartbeat_timestamp = last_heartbeat.timestamp()
 
+        active_mid = self._world.mission.id or self._active_mission_id
+        conn_changed = v.connection != prev_conn
+        crit_status_changed = (
+            str(v.status) != prev_status
+            and (str(v.status).upper() in {"FAULT", "UNKNOWN"} or prev_status.upper() in {"FAULT", "UNKNOWN"})
+        )
+        mode_changed = v.mode != prev_mode
+        crossed_low_battery = prev_battery >= 20.0 and v.battery < 20.0
+
+        if active_mid and (
+            conn_changed or crit_status_changed or mode_changed or crossed_low_battery
+        ):
+            reasons: list[str] = []
+            if conn_changed:
+                reasons.append(f"connection {prev_conn.value}->{v.connection.value}")
+            if crit_status_changed:
+                reasons.append(f"status {prev_status}->{v.status}")
+            if mode_changed:
+                reasons.append(f"mode {prev_mode.value}->{v.mode.value}")
+            if crossed_low_battery:
+                reasons.append(f"critical battery {v.battery:.1f}% (<20%)")
+            self.memory_store.record_transition_snapshot(
+                self._world,
+                mission_id=active_mid,
+                timestamp=now_ts,
+                trigger_type=SnapshotTriggerTypeEnum.VEHICLE_STATE_TRANSITION,
+                trigger_reason=f"Vehicle {vehicle_id} state change: {', '.join(reasons)}",
+                phase=SnapshotPhaseEnum.STATE_TRANSITION,
+                task_states=self._active_task_specs,
+            )
+
         # Route any actionable vehicle state events (critical battery, fault, disconnect) when mission active
         if (
             not self._emergency_stopped
@@ -1200,9 +1718,6 @@ class UltronLangGraphAgent(UltronAgentPort):
                 or v.connection != UltronConnectionStatus.ONLINE
             )
         ):
-            now_ts = (
-                last_heartbeat.timestamp() if last_heartbeat is not None else time.time()
-            )
             self._route_and_schedule_world_events(now_ts=now_ts)
 
     async def mark_vehicle_unknown(
@@ -1213,12 +1728,25 @@ class UltronLangGraphAgent(UltronAgentPort):
     ) -> None:
         """Transitions a vehicle to UNKNOWN on heartbeat timeout and routes disconnect event."""
         v = self._world.vehicles.get(vehicle_id)
+        prev_conn = v.connection if v is not None else None
         if v:
             v.connection = UltronConnectionStatus.UNKNOWN
             v.pose_valid = False
         self._unknown_transitions.append((vehicle_id, detected_at))
         if len(self._unknown_transitions) > 500:
             del self._unknown_transitions[:-500]
+
+        active_mid = self._world.mission.id or self._active_mission_id
+        if active_mid and prev_conn != UltronConnectionStatus.UNKNOWN:
+            self.memory_store.record_transition_snapshot(
+                self._world,
+                mission_id=active_mid,
+                timestamp=detected_at.timestamp(),
+                trigger_type=SnapshotTriggerTypeEnum.VEHICLE_STATE_TRANSITION,
+                trigger_reason=f"Vehicle {vehicle_id} heartbeat timed out -> UNKNOWN",
+                phase=SnapshotPhaseEnum.STATE_TRANSITION,
+                task_states=self._active_task_specs,
+            )
 
         if (
             vehicle_id == "SCOUT01"
@@ -1294,13 +1822,8 @@ class UltronLangGraphAgent(UltronAgentPort):
     ) -> list[SensorObservation]:
         """Ingest a validated `/detections_json` frame directly into ULTRON's `WorldModel`.
 
-        Preserves the exact coordinate frame (`oak_rgb_camera_optical_frame`,
-        `oak_parent_frame`, `map`, etc.), 3D position (`x, y, z`), `range_m`,
-        sensor timestamp (`stamp`), and local ingestion timestamp (`received_at`).
-        Processes empty detection frames (`objects == []`) as sensor activity/freshness
-        without claiming free space is clear, and routes events through `EventRouter`,
-        `StandingOrderRegistry`, and `LLM Event Triage` asynchronously without blocking
-        camera ingestion.
+        Snapshots are captured ONLY when a meaningful environmental change occurs
+        (never on empty frames or routine duplicate detections).
         """
         self._world.environment.transform_map_validated = map_frame_confirmed
         self.transform_registry.map_frame_confirmed = map_frame_confirmed
@@ -1338,6 +1861,7 @@ class UltronLangGraphAgent(UltronAgentPort):
             ingested_ts,
         )
 
+        pre_fp = self._environment_fingerprint()
         created_obs: list[SensorObservation] = []
         for obj in objects:
             cls_name = getattr(obj, "class_name", None) or (
@@ -1434,6 +1958,9 @@ class UltronLangGraphAgent(UltronAgentPort):
             )
             created_obs.append(sensor_obs)
 
+        post_fp = self._environment_fingerprint()
+        active_mid = self._world.mission.id or self._active_mission_id
+
         # Route generated events through EventRouter -> Standing Orders / LLM Triage -> Replan Worker
         if (
             created_obs
@@ -1442,6 +1969,19 @@ class UltronLangGraphAgent(UltronAgentPort):
             and self._active_plan is not None
         ):
             self._route_and_schedule_world_events(now_ts=ingested_ts)
+        elif created_obs and post_fp != pre_fp and active_mid:
+            # Capture significant environmental change even if mission is not yet actively replanning
+            self.memory_store.record_transition_snapshot(
+                self._world,
+                mission_id=active_mid,
+                timestamp=stamp if stamp > 0.0 else ingested_ts,
+                trigger_type=SnapshotTriggerTypeEnum.SIGNIFICANT_OBSERVATION_ACCEPTED,
+                trigger_reason=(
+                    f"Significant observation ingested ({len(created_obs)} object(s) in frame '{frame}')"
+                ),
+                phase=SnapshotPhaseEnum.STATE_TRANSITION,
+                task_states=self._active_task_specs,
+            )
 
         return created_obs
 
@@ -1467,6 +2007,7 @@ class UltronLangGraphAgent(UltronAgentPort):
         if len(self._observations) > 500:
             del self._observations[:-500]
 
+        pre_fp = self._environment_fingerprint()
         now_ts = time.time()
         raw = observation.raw or {}
         if isinstance(raw, dict) and "frame" in raw and "position" in raw:
@@ -1550,10 +2091,41 @@ class UltronLangGraphAgent(UltronAgentPort):
             )
             self._world = update_world_model(self._world, structured_obs)
 
+        post_fp = self._environment_fingerprint()
+        active_mid = (
+            observation.mission_id
+            or self._world.mission.id
+            or self._active_mission_id
+        )
+
         # Route events through EventRouter -> Standing Orders / LLM Triage -> Replan Worker
         if (
             not self._emergency_stopped
             and self._world.mission.status == UltronMissionStatus.IN_PROGRESS
             and self._active_plan is not None
         ):
-            self._route_and_schedule_world_events(now_ts=now_ts)
+            routed = self._route_and_schedule_world_events(now_ts=now_ts)
+            if not any(r.accepted for r in routed) and post_fp != pre_fp and active_mid:
+                self.memory_store.record_transition_snapshot(
+                    self._world,
+                    mission_id=active_mid,
+                    timestamp=observation.timestamp.timestamp(),
+                    trigger_type=SnapshotTriggerTypeEnum.SIGNIFICANT_OBSERVATION_ACCEPTED,
+                    trigger_reason=(
+                        f"Observation {observation.observation_id} ({observation.obs_type}) accepted into World Model"
+                    ),
+                    phase=SnapshotPhaseEnum.STATE_TRANSITION,
+                    task_states=self._active_task_specs,
+                )
+        elif post_fp != pre_fp and active_mid:
+            self.memory_store.record_transition_snapshot(
+                self._world,
+                mission_id=active_mid,
+                timestamp=observation.timestamp.timestamp(),
+                trigger_type=SnapshotTriggerTypeEnum.SIGNIFICANT_OBSERVATION_ACCEPTED,
+                trigger_reason=(
+                    f"Observation {observation.observation_id} ({observation.obs_type}) accepted into World Model"
+                ),
+                phase=SnapshotPhaseEnum.STATE_TRANSITION,
+                task_states=self._active_task_specs,
+            )

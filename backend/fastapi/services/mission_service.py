@@ -1,10 +1,10 @@
-"""Mission lifecycle, physical SCOUT01 serial execution, dead-reckoning map tracking, and replay service (§3, §4, §7).
+"""Mission lifecycle, physical SCOUT01 serial execution, dead-reckoning map tracking, and replay service (§3, §4, §7 + Phase 3 Mission Memory).
 
 Uses `UltronAgentPort` (`UltronLangGraphAgent` / `StubUltronAgent`) for mission creation
-and task decomposition, persists `Mission`, `Task`, `Event`, and `ReasoningTrace`
-records to SQLite, broadcasts live updates over `DashboardGateway`, and executes
-assigned tasks over USB serial (`ScoutSerialWriter` on `/dev/ttyACM1`) while updating
-SCOUT01's position on the SVG Tactical Floor Map in real time.
+and task decomposition, persists `Mission`, `Task`, `Event`, `ReasoningTrace`, and
+immutable `MissionSnapshot` records to SQLite, broadcasts live updates over
+`DashboardGateway`, and executes assigned tasks over USB serial (`ScoutSerialWriter`
+on `/dev/ttyACM1`) while updating SCOUT01's position on the SVG Tactical Floor Map.
 """
 
 from __future__ import annotations
@@ -12,7 +12,13 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
 import math
-from typing import TYPE_CHECKING
+from pathlib import Path
+import sys
+from typing import TYPE_CHECKING, Any
+
+_project_root = str(Path(__file__).resolve().parent.parent.parent.parent)
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
 from core.config import settings
 from core.errors import ResourceNotFoundError
@@ -34,6 +40,22 @@ from services.scout_serial_writer import ScoutSerialWriter
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
+from ultron.memory.store import (
+    SnapshotDecisionContext,
+    SnapshotPhaseEnum,
+    SnapshotTaskState,
+    SnapshotTriggerTypeEnum,
+    build_mission_snapshot,
+)
+from ultron.schemas.commands import Position2D
+from ultron.schemas.mission import MissionStatus as UltronMissionStatus, VehicleID
+from ultron.schemas.world import (
+    ConnectionStatus as UltronConnectionStatus,
+    MissionState,
+    ScoutState,
+    VehicleMode as UltronVehicleMode,
+    WorldModel,
+)
 from ultron_stub import StubUltronAgent, UltronAgentPort
 from websocket.dashboard_gateway import DashboardGateway, dashboard_gateway
 
@@ -147,6 +169,96 @@ class MissionService:
         self._gateway = gateway
         self._events.set_gateway(gateway)
 
+    async def _persist_unsynced_agent_snapshots(
+        self,
+        session: AsyncSession,
+        mission_id: str,
+        *,
+        commit: bool = False,
+    ) -> int:
+        """Persist any unsynced `MissionMemorySnapshot` records from `self._agent.memory_store` to SQLite."""
+        mem_store = getattr(self._agent, "memory_store", None)
+        if mem_store is None or not hasattr(self._events, "record_mission_snapshot"):
+            return 0
+
+        unsynced = mem_store.get_unsynced_snapshots(mission_id)
+        persisted = 0
+        for snap in unsynced:
+            try:
+                await self._events.record_mission_snapshot(
+                    session,
+                    snap,
+                    commit=False,
+                )
+                mem_store.mark_snapshot_synced(snap.snapshot_id)
+                persisted += 1
+            except Exception as exc:
+                logger.error(
+                    f"Failed to persist snapshot {snap.snapshot_id} for mission {mission_id}: {exc}"
+                )
+        if commit and persisted > 0:
+            await session.commit()
+        return persisted
+
+    async def _build_world_for_stub_snapshot(
+        self,
+        session: AsyncSession,
+        mission_id: str,
+        objective: str,
+        status: str,
+        tasks: list[Task],
+    ) -> WorldModel:
+        """Construct a grounded `WorldModel` representation from SQLite state when `StubUltronAgent` is used."""
+        v_row = await session.get(Vehicle, "SCOUT01")
+        if v_row is not None:
+            conn_enum = (
+                UltronConnectionStatus.ONLINE
+                if v_row.connection == "CONNECTED"
+                else (
+                    UltronConnectionStatus.OFFLINE
+                    if v_row.connection == "DISCONNECTED"
+                    else UltronConnectionStatus.UNKNOWN
+                )
+            )
+            mode_enum = (
+                UltronVehicleMode.REAL
+                if v_row.mode == "real"
+                else UltronVehicleMode.SIMULATED
+            )
+            scout_state = ScoutState(
+                mode=mode_enum,
+                position=Position2D(x=v_row.position_x, y=v_row.position_y),
+                pose_valid=(v_row.connection == "CONNECTED"),
+                battery=v_row.battery,
+                status=v_row.status,
+                connection=conn_enum,
+                last_heartbeat_timestamp=(
+                    v_row.last_heartbeat.timestamp() if v_row.last_heartbeat else None
+                ),
+            )
+        else:
+            scout_state = ScoutState()
+
+        m_status = (
+            UltronMissionStatus.COMPLETED
+            if status == "COMPLETED"
+            else (
+                UltronMissionStatus.FAILED
+                if status in ("FAILED", "ABORTED")
+                else UltronMissionStatus.IN_PROGRESS
+            )
+        )
+        world = WorldModel(
+            mission=MissionState(id=mission_id, objective=objective, status=m_status),
+            vehicles={"SCOUT01": scout_state},
+        )
+        completed_ids = [t.id for t in tasks if t.status == "COMPLETED"]
+        active_tasks = [t.id for t in tasks if t.status in ("ASSIGNED", "IN_PROGRESS")]
+        world.mission.tasks.completed = completed_ids
+        world.mission.tasks.active[VehicleID.SCOUT] = active_tasks[0] if active_tasks else None
+        world.mission.tasks.pending = active_tasks[1:] if len(active_tasks) > 1 else []
+        return world
+
     async def _next_mission_id(self, session: AsyncSession) -> str:
         """Generate a sequential human-readable mission ID (M001, M002, ...) per §7."""
         count_result = await session.execute(select(func.count()).select_from(Mission))
@@ -176,7 +288,7 @@ class MissionService:
         session: AsyncSession,
         request: MissionCreateRequest,
     ) -> tuple[MissionCreateResponse, str | None]:
-        """Create a mission, persist records, and return (response, rationale) for downstream tasks (e.g. TTS)."""
+        """Create a mission, persist records & snapshots, and return (response, rationale)."""
         mission_id = await self._next_mission_id(session)
         now = datetime.now(timezone.utc)
 
@@ -210,7 +322,7 @@ class MissionService:
             session.add(t_row)
             task_rows.append(t_row)
 
-        # Persist mission, tasks, initial event, and reasoning trace in a single atomic commit
+        # Persist mission, tasks, initial event, reasoning trace, and snapshots in a single atomic commit
         event_read = await self._events.record_event(
             session,
             mission_id=mission_id,
@@ -232,6 +344,75 @@ class MissionService:
             commit=False,
             broadcast=False,
         )
+
+        persisted_snaps = await self._persist_unsynced_agent_snapshots(
+            session, mission_id, commit=False
+        )
+        if persisted_snaps == 0 and hasattr(self._events, "record_mission_snapshot"):
+            # Fallback snapshot capture when StubUltronAgent (without MemoryStore) is used
+            stub_world_before = await self._build_world_for_stub_snapshot(
+                session, mission_id, request.objective, "PLANNING", []
+            )
+            before_snap = build_mission_snapshot(
+                stub_world_before,
+                mission_id=mission_id,
+                sequence=1,
+                timestamp=now.timestamp(),
+                trigger_type=SnapshotTriggerTypeEnum.MISSION_CREATED,
+                trigger_reason=f"Mission {mission_id} created: {request.objective}",
+                phase=SnapshotPhaseEnum.BEFORE,
+                associated_event_id=event_read.id,
+                task_states=[],
+            )
+            stub_world_after = await self._build_world_for_stub_snapshot(
+                session, mission_id, request.objective, plan.status, task_rows
+            )
+            after_snap = build_mission_snapshot(
+                stub_world_after,
+                mission_id=mission_id,
+                sequence=2,
+                timestamp=(now + timedelta(milliseconds=1)).timestamp(),
+                trigger_type=SnapshotTriggerTypeEnum.INITIAL_PLAN_ACCEPTED,
+                trigger_reason=f"Initial plan accepted for {mission_id}",
+                phase=SnapshotPhaseEnum.AFTER,
+                associated_event_id=event_read.id,
+                associated_trace_id=trace_read.id,
+                paired_before_snapshot_id=before_snap.snapshot_id,
+                task_states=[
+                    SnapshotTaskState(
+                        task_id=t.id,
+                        vehicle_id=t.vehicle_id or "SCOUT01",
+                        task_type=t.type,
+                        area=t.area,
+                        target=t.target,
+                        priority=t.priority,
+                        status=t.status,
+                        execution_stage="ASSIGNED",
+                        is_simulated=True,
+                    )
+                    for t in task_rows
+                ],
+                decision_context=SnapshotDecisionContext(
+                    event_id=event_read.id,
+                    event_type="MISSION_STATE_CHANGED",
+                    event_priority="LOW",
+                    event_source="mission_lifecycle",
+                    event_source_mode="simulated",
+                    planner_source="stub" if plan.is_stub else "planner",
+                    validation_passed=True,
+                    resulting_task_ids=tuple(t.id for t in task_rows),
+                    rationale=plan.rationale,
+                ),
+            )
+            try:
+                await self._events.record_mission_snapshot(
+                    session, before_snap, commit=False
+                )
+                await self._events.record_mission_snapshot(
+                    session, after_snap, commit=False
+                )
+            except Exception as exc:
+                logger.error(f"Failed to persist initial mission snapshots: {exc}")
 
         await session.commit()
 
@@ -326,6 +507,8 @@ class MissionService:
         context: str,
     ) -> bool:
         """Send 'X' (stop) to SCOUT01 and record a CRITICAL SAFETY fault if transmission fails."""
+        from services.scout_serial_writer import is_global_emergency_stop_latched
+
         if not writer.armed:
             return True
         try:
@@ -340,7 +523,10 @@ class MissionService:
             async with session_factory() as session:
                 v_row = await session.get(Vehicle, "SCOUT01")
                 if v_row is not None and v_row.status != "EMERGENCY_STOPPED":
-                    v_row.status = "FAULT"
+                    if is_global_emergency_stop_latched():
+                        v_row.status = "EMERGENCY_STOPPED"
+                    else:
+                        v_row.status = "FAULT"
                 await self._events.record_event(
                     session,
                     mission_id=mission_id,
@@ -836,7 +1022,7 @@ class MissionService:
         session: AsyncSession,
         mission_id: str,
     ) -> MissionDetailRead:
-        """Complete a mission, finalize tasks, persist audit records, and broadcast."""
+        """Complete a mission, finalize tasks, persist audit records & completion snapshots, and broadcast."""
         stmt = (
             select(Mission)
             .where(Mission.id == mission_id)
@@ -847,6 +1033,21 @@ class MissionService:
             raise ResourceNotFoundError("Mission", mission_id)
 
         now = datetime.now(timezone.utc)
+        pre_tasks = [
+            SnapshotTaskState(
+                task_id=t.id,
+                vehicle_id=t.vehicle_id or "SCOUT01",
+                task_type=t.type,
+                area=t.area,
+                target=t.target,
+                priority=t.priority,
+                status=t.status,
+                execution_stage="ASSIGNED",
+                is_simulated=True,
+            )
+            for t in sorted(mission_row.tasks, key=lambda item: (item.priority, item.id))
+        ]
+
         mission_row.status = MissionStatusEnum.COMPLETED.value
         mission_row.completed_at = now
 
@@ -855,6 +1056,21 @@ class MissionService:
             if task.status not in ("COMPLETED", "CANCELLED", "FAILED"):
                 task.status = "COMPLETED"
             completed_task_ids.append(task.id)
+
+        post_tasks = [
+            SnapshotTaskState(
+                task_id=t.id,
+                vehicle_id=t.vehicle_id or "SCOUT01",
+                task_type=t.type,
+                area=t.area,
+                target=t.target,
+                priority=t.priority,
+                status=t.status,
+                execution_stage="SIMULATED_COMPLETED",
+                is_simulated=True,
+            )
+            for t in sorted(mission_row.tasks, key=lambda item: (item.priority, item.id))
+        ]
 
         event_read = await self._events.record_event(
             session,
@@ -878,6 +1094,91 @@ class MissionService:
             commit=False,
             broadcast=False,
         )
+
+        # Capture BEFORE and AFTER completion snapshots
+        mem_store = getattr(self._agent, "memory_store", None)
+        agent_world = getattr(self._agent, "world", None)
+        if mem_store is not None and agent_world is not None:
+            before_comp_snap = mem_store.record_transition_snapshot(
+                agent_world,
+                mission_id=mission_id,
+                timestamp=now.timestamp(),
+                trigger_type=SnapshotTriggerTypeEnum.TASK_STATE_TRANSITION,
+                trigger_reason=f"Before simulated completion of mission {mission_id}",
+                phase=SnapshotPhaseEnum.BEFORE,
+                associated_event_id=event_read.id,
+                task_states=pre_tasks,
+            )
+            if agent_world.mission.id == mission_id:
+                agent_world.mission.status = UltronMissionStatus.COMPLETED
+                agent_world.mission.tasks.completed = list(completed_task_ids)
+                agent_world.mission.tasks.active.clear()
+                agent_world.mission.tasks.pending.clear()
+            if hasattr(self._agent, "update_task_execution_states"):
+                self._agent.update_task_execution_states(post_tasks)
+            mem_store.record_transition_snapshot(
+                agent_world,
+                mission_id=mission_id,
+                timestamp=(now + timedelta(milliseconds=1)).timestamp(),
+                trigger_type=SnapshotTriggerTypeEnum.MISSION_COMPLETED,
+                trigger_reason=f"Simulated completion of mission {mission_id} ({len(completed_task_ids)} tasks finalized)",
+                phase=SnapshotPhaseEnum.AFTER,
+                associated_event_id=event_read.id,
+                associated_trace_id=trace_read.id,
+                paired_before_snapshot_id=before_comp_snap.snapshot_id,
+                task_states=post_tasks,
+                decision_context=SnapshotDecisionContext(
+                    event_id=event_read.id,
+                    event_type="MISSION_STATE_CHANGED",
+                    event_priority="LOW",
+                    event_source="mission_lifecycle",
+                    event_source_mode="simulated",
+                    planner_source="simulated_completion_helper",
+                    validation_passed=True,
+                    resulting_task_ids=tuple(completed_task_ids),
+                    rationale=trace_read.rationale,
+                ),
+            )
+            await self._persist_unsynced_agent_snapshots(
+                session, mission_id, commit=False
+            )
+        elif hasattr(self._events, "record_mission_snapshot"):
+            stub_world_after = await self._build_world_for_stub_snapshot(
+                session,
+                mission_id,
+                mission_row.objective,
+                "COMPLETED",
+                list(mission_row.tasks),
+            )
+            comp_snap = build_mission_snapshot(
+                stub_world_after,
+                mission_id=mission_id,
+                sequence=99,
+                timestamp=(now + timedelta(milliseconds=1)).timestamp(),
+                trigger_type=SnapshotTriggerTypeEnum.MISSION_COMPLETED,
+                trigger_reason=f"Simulated completion of mission {mission_id}",
+                phase=SnapshotPhaseEnum.AFTER,
+                associated_event_id=event_read.id,
+                associated_trace_id=trace_read.id,
+                task_states=post_tasks,
+                decision_context=SnapshotDecisionContext(
+                    event_id=event_read.id,
+                    event_type="MISSION_STATE_CHANGED",
+                    event_priority="LOW",
+                    event_source="mission_lifecycle",
+                    event_source_mode="simulated",
+                    planner_source="simulated_completion_helper",
+                    validation_passed=True,
+                    resulting_task_ids=tuple(completed_task_ids),
+                    rationale=trace_read.rationale,
+                ),
+            )
+            try:
+                await self._events.record_mission_snapshot(
+                    session, comp_snap, commit=False
+                )
+            except Exception as exc:
+                logger.error(f"Failed to persist completion snapshot: {exc}")
 
         await session.commit()
 
