@@ -3,6 +3,7 @@
 Exports:
 - Event schemas (`UltronEvent`, `EventTypeEnum`, `EventSourceEnum`, `EventPriorityEnum`, `RoutedEventOutcome`)
 - Lightweight in-process `EventRouter`
+- Declarative `StandingOrderRegistry` and `StandingOrderConfigError`
 """
 
 from ultron.events.router import EventRouter, compute_event_signature, map_event_to_db_category
@@ -15,6 +16,12 @@ from ultron.events.schemas import (
     UltronEvent,
     priority_rank,
 )
+from ultron.events.standing_orders import (
+    StandingOrderConfigError,
+    StandingOrderDefinition,
+    StandingOrderExecutionResult,
+    StandingOrderRegistry,
+)
 
 __all__ = [
     "EventPriorityEnum",
@@ -23,6 +30,10 @@ __all__ = [
     "EventSourceEnum",
     "EventTypeEnum",
     "RoutedEventOutcome",
+    "StandingOrderConfigError",
+    "StandingOrderDefinition",
+    "StandingOrderExecutionResult",
+    "StandingOrderRegistry",
     "UltronEvent",
     "compute_event_signature",
     "map_event_to_db_category",

@@ -1,0 +1,190 @@
+{
+  "version": "1.0",
+  "standing_orders": [
+    {
+      "id": "SO-01-CRITICAL-BATTERY",
+      "name": "Critical Battery Safe Hold & Report",
+      "description": "When SCOUT01 battery falls below the 20% critical threshold, immediately halt active exploration and report battery status without inventing unverified return routes or violating the <=20% movement lock.",
+      "supported_event_types": ["VEHICLE_LOW_BATTERY"],
+      "priority": 100,
+      "cooldown_sec": 15.0,
+      "operator_intervention_required": true,
+      "preconditions": {
+        "requires_active_mission": true,
+        "requires_vehicle_online": false,
+        "max_battery_pct": 20.0,
+        "min_battery_pct": null,
+        "requires_world_evidence": false,
+        "requires_route_blocked": false
+      },
+      "required_evidence": ["vehicle_battery_telemetry"],
+      "response_template": {
+        "branch": "critical_battery",
+        "rationale_prefix": "USED CACHED PLAN — Standing Order SO-01-CRITICAL-BATTERY:",
+        "tasks": [
+          {
+            "id": "T-SAFE-01",
+            "vehicle": "SCOUT01",
+            "type": "STOP",
+            "area": null,
+            "target": null,
+            "priority": 1
+          },
+          {
+            "id": "T-SAFE-02",
+            "vehicle": "SCOUT01",
+            "type": "REPORT",
+            "area": null,
+            "target": null,
+            "priority": 2
+          }
+        ]
+      }
+    },
+    {
+      "id": "SO-02-SENSOR-CONFLICT",
+      "name": "Conflicting Sensor Evidence Hold & Re-Scan",
+      "description": "When multi-sensor or cross-frame observations on a tracked object are marked CONFLICTED, halt forward motion, scan the target to resolve the discrepancy, and report.",
+      "supported_event_types": ["SENSOR_CONFLICT"],
+      "priority": 90,
+      "cooldown_sec": 8.0,
+      "operator_intervention_required": false,
+      "preconditions": {
+        "requires_active_mission": true,
+        "requires_vehicle_online": true,
+        "max_battery_pct": null,
+        "min_battery_pct": 20.0,
+        "requires_world_evidence": true,
+        "requires_route_blocked": false
+      },
+      "required_evidence": ["conflicted_tracked_object", "observation_ids"],
+      "response_template": {
+        "branch": "sensor_conflict",
+        "rationale_prefix": "USED CACHED PLAN — Standing Order SO-02-SENSOR-CONFLICT:",
+        "tasks": [
+          {
+            "id": "T-CONF-01",
+            "vehicle": "SCOUT01",
+            "type": "STOP",
+            "area": null,
+            "target": null,
+            "priority": 1
+          },
+          {
+            "id": "T-CONF-02",
+            "vehicle": "SCOUT01",
+            "type": "SCAN",
+            "area": null,
+            "target": "target",
+            "priority": 2
+          },
+          {
+            "id": "T-CONF-03",
+            "vehicle": "SCOUT01",
+            "type": "REPORT",
+            "area": null,
+            "target": null,
+            "priority": 3
+          }
+        ]
+      }
+    },
+    {
+      "id": "SO-03-BLOCKED-ROUTE",
+      "name": "Blocked Route Conservative Stop & Scan",
+      "description": "When a verified obstacle obstructs the planned route and 360-degree free-space geometry is unverified, hold position, scan sector_A, and report without inventing a speculative detour.",
+      "supported_event_types": ["OBSTACLE_DETECTED"],
+      "priority": 80,
+      "cooldown_sec": 8.0,
+      "operator_intervention_required": false,
+      "preconditions": {
+        "requires_active_mission": true,
+        "requires_vehicle_online": true,
+        "max_battery_pct": null,
+        "min_battery_pct": 20.0,
+        "requires_world_evidence": true,
+        "requires_route_blocked": true
+      },
+      "required_evidence": ["obstacle_in_world_model"],
+      "response_template": {
+        "branch": "blocked_route",
+        "rationale_prefix": "USED CACHED PLAN — Standing Order SO-03-BLOCKED-ROUTE:",
+        "tasks": [
+          {
+            "id": "T-OBS-01",
+            "vehicle": "SCOUT01",
+            "type": "STOP",
+            "area": null,
+            "target": null,
+            "priority": 1
+          },
+          {
+            "id": "T-OBS-02",
+            "vehicle": "SCOUT01",
+            "type": "SCAN",
+            "area": "sector_A",
+            "target": null,
+            "priority": 2
+          },
+          {
+            "id": "T-OBS-03",
+            "vehicle": "SCOUT01",
+            "type": "REPORT",
+            "area": null,
+            "target": null,
+            "priority": 3
+          }
+        ]
+      }
+    },
+    {
+      "id": "SO-04-HAZARD-HOLD",
+      "name": "Verified Hazard Immediate Stop, Scan & Report",
+      "description": "When a high-confidence environmental hazard (fire, smoke, thermal_anomaly) is verified in the World Model, immediately stop movement, scan the sector, and escalate to operator.",
+      "supported_event_types": ["HAZARD_DETECTED"],
+      "priority": 85,
+      "cooldown_sec": 10.0,
+      "operator_intervention_required": true,
+      "preconditions": {
+        "requires_active_mission": true,
+        "requires_vehicle_online": true,
+        "max_battery_pct": null,
+        "min_battery_pct": 20.0,
+        "requires_world_evidence": true,
+        "requires_route_blocked": false,
+        "min_confidence": 0.7
+      },
+      "required_evidence": ["hazard_in_world_model"],
+      "response_template": {
+        "branch": "hazard_hold",
+        "rationale_prefix": "USED CACHED PLAN — Standing Order SO-04-HAZARD-HOLD:",
+        "tasks": [
+          {
+            "id": "T-HAZ-01",
+            "vehicle": "SCOUT01",
+            "type": "STOP",
+            "area": null,
+            "target": null,
+            "priority": 1
+          },
+          {
+            "id": "T-HAZ-02",
+            "vehicle": "SCOUT01",
+            "type": "SCAN",
+            "area": "sector_A",
+            "target": null,
+            "priority": 2
+          },
+          {
+            "id": "T-HAZ-03",
+            "vehicle": "SCOUT01",
+            "type": "REPORT",
+            "area": null,
+            "target": null,
+            "priority": 3
+          }
+        ]
+      }
+    }
+  ]
+}
