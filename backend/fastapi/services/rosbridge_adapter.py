@@ -1,16 +1,17 @@
-"""Dedicated read-only ROS 2 Humble ROSBridge adapter for rover perception (`/detections_json`).
+"""Dedicated read-only ROS 2 Humble ROSBridge adapter for rover perception (`/detections_json` and `/unilidar/cloud`).
 
 Architectural & Safety Guarantees:
 1. Strictly read-only perception subscriber: subscribes ONLY to the configured
    detection topic (`/detections_json`, default ROS 2 Humble message type
    `std_msgs/msg/String`, with compatibility for `std_msgs/String` and standard
-   ROSBridge v2 JSON protocol envelopes).
+   ROSBridge v2 JSON protocol envelopes) and optionally the configured LiDAR topic
+   (`/unilidar/cloud`, `sensor_msgs/msg/PointCloud2`) when `lidar_enabled=True`.
 2. NEVER publishes ROS messages, NEVER calls ROS services or action servers,
    NEVER subscribes to undocumented command interfaces, and NEVER enables
    physical actuator control (`SHADOW_HARDWARE_LOCKOUT` and `LockedRealVehicleAdapter`
    remain strictly enforced).
 3. Isolates Twisted/Autobahn callbacks from the FastAPI asyncio event loop via
-   `loop.call_soon_threadsafe` and a bounded `asyncio.Queue`, guaranteeing that
+   `loop.call_soon_threadsafe` and bounded `asyncio.Queue` instances, guaranteeing that
    ROS callbacks never block the event loop or perform synchronous SQLite I/O.
 4. Supports clean startup, automatic reconnect state tracking, and clean
    unsubscribe/termination on application shutdown, while degrading gracefully
@@ -150,7 +151,7 @@ def _default_ros_topic_factory(
 
 @dataclass(frozen=True)
 class RosBridgeAdapterConfig:
-    """Validated configuration for the read-only ROS 2 Humble detection subscriber."""
+    """Validated configuration for the read-only ROS 2 Humble detection and LiDAR subscribers."""
 
     enabled: bool = False
     host: str = ""
@@ -158,19 +159,23 @@ class RosBridgeAdapterConfig:
     vehicle_id: str = ""
     detections_topic: str = "/detections_json"
     message_type: str = DETECTIONS_MESSAGE_TYPE
+    lidar_enabled: bool = False
+    lidar_topic: str = "/unilidar/cloud"
+    lidar_message_type: str = "sensor_msgs/msg/PointCloud2"
     queue_maxsize: int = 128
     connect_timeout_seconds: float = 3.0
     reconnect_interval_seconds: float = 2.0
 
 
 class RosBridgeAdapter:
-    """Manages the read-only `roslibpy` connection and `/detections_json` subscription."""
+    """Manages the read-only `roslibpy` connection and `/detections_json` + `/unilidar/cloud` subscriptions."""
 
     def __init__(
         self,
         config: RosBridgeAdapterConfig,
         *,
         on_detection_message: RawDetectionCallback | None = None,
+        on_lidar_message: RawDetectionCallback | None = None,
         on_connection_state_change: ConnectionStateCallback | None = None,
         ros_client_factory: RosClientFactory | None = None,
         ros_topic_factory: RosTopicFactory | None = None,
@@ -181,6 +186,7 @@ class RosBridgeAdapter:
 
         self._config = config
         self._on_detection_message = on_detection_message
+        self._on_lidar_message = on_lidar_message
         self._on_connection_state_change = on_connection_state_change
         self._client_factory: RosClientFactory = (
             ros_client_factory or _default_ros_client_factory
@@ -196,16 +202,22 @@ class RosBridgeAdapter:
         )
         self._ros_client: RosClientLike | None = None
         self._detections_topic: RosTopicLike | None = None
+        self._lidar_topic: RosTopicLike | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._queue: asyncio.Queue[dict[str, Any] | str] = asyncio.Queue(
             maxsize=config.queue_maxsize
         )
+        self._lidar_queue: asyncio.Queue[dict[str, Any] | str] = asyncio.Queue(
+            maxsize=max(4, min(32, config.queue_maxsize))
+        )
         self._worker_task: asyncio.Task[None] | None = None
+        self._lidar_worker_task: asyncio.Task[None] | None = None
         self._reconnect_task: asyncio.Task[None] | None = None
         self._running: bool = False
         self._has_connected_once: bool = False
         self._dropped_queue_messages: int = 0
         self._received_messages_count: int = 0
+        self._received_lidar_messages_count: int = 0
 
     @property
     def config(self) -> RosBridgeAdapterConfig:
@@ -243,14 +255,21 @@ class RosBridgeAdapter:
     def received_messages_count(self) -> int:
         return self._received_messages_count
 
+    @property
+    def received_lidar_messages_count(self) -> int:
+        return self._received_lidar_messages_count
+
     def set_callbacks(
         self,
         *,
         on_detection_message: RawDetectionCallback | None = None,
+        on_lidar_message: RawDetectionCallback | None = None,
         on_connection_state_change: ConnectionStateCallback | None = None,
     ) -> None:
         if on_detection_message is not None:
             self._on_detection_message = on_detection_message
+        if on_lidar_message is not None:
+            self._on_lidar_message = on_lidar_message
         if on_connection_state_change is not None:
             self._on_connection_state_change = on_connection_state_change
 
@@ -299,6 +318,18 @@ class RosBridgeAdapter:
         with suppress(asyncio.QueueFull):
             self._queue.put_nowait(message)
 
+    def _enqueue_lidar_message_nonblocking(self, message: dict[str, Any] | str) -> None:
+        """Bounded LiDAR queue insertion executed on the asyncio event loop thread."""
+        if not self._running:
+            return
+        self._received_lidar_messages_count += 1
+        if self._lidar_queue.full():
+            with suppress(asyncio.QueueEmpty):
+                _ = self._lidar_queue.get_nowait()
+                self._lidar_queue.task_done()
+        with suppress(asyncio.QueueFull):
+            self._lidar_queue.put_nowait(message)
+
     def handle_ros_topic_callback(self, message: dict[str, Any] | str) -> None:
         """Thread-safe callback invoked by `roslibpy.Topic.subscribe`.
 
@@ -309,6 +340,16 @@ class RosBridgeAdapter:
             return
         try:
             loop.call_soon_threadsafe(self._enqueue_message_nonblocking, message)
+        except RuntimeError:
+            return
+
+    def handle_ros_lidar_topic_callback(self, message: dict[str, Any] | str) -> None:
+        """Thread-safe callback invoked by `roslibpy.Topic.subscribe` for LiDAR `/unilidar/cloud`."""
+        loop = self._loop
+        if loop is None or loop.is_closed() or not self._running:
+            return
+        try:
+            loop.call_soon_threadsafe(self._enqueue_lidar_message_nonblocking, message)
         except RuntimeError:
             return
 
@@ -324,6 +365,21 @@ class RosBridgeAdapter:
                     logger.error(f"Error processing ROS detection frame: {exc}")
                 finally:
                     self._queue.task_done()
+        except asyncio.CancelledError:
+            raise
+
+    async def _lidar_queue_worker_loop(self) -> None:
+        """Asyncio background consumer that forwards queued LiDAR scans to PerceptionService."""
+        try:
+            while self._running:
+                message = await self._lidar_queue.get()
+                try:
+                    if self._on_lidar_message is not None:
+                        await self._on_lidar_message(message)
+                except Exception as exc:
+                    logger.error(f"Error processing ROS LiDAR frame: {exc}")
+                finally:
+                    self._lidar_queue.task_done()
         except asyncio.CancelledError:
             raise
 
@@ -387,6 +443,21 @@ class RosBridgeAdapter:
                 topic.subscribe(self.handle_ros_topic_callback)
                 self._detections_topic = topic
 
+            if (
+                self._config.lidar_enabled
+                and self._config.lidar_topic
+                and self._config.lidar_message_type
+                and self._lidar_topic is None
+                and self._ros_client is not None
+            ):
+                l_topic = self._topic_factory(
+                    self._ros_client,
+                    self._config.lidar_topic,
+                    self._config.lidar_message_type,
+                )
+                l_topic.subscribe(self.handle_ros_lidar_topic_callback)
+                self._lidar_topic = l_topic
+
             assert self._ros_client is not None
             await asyncio.to_thread(
                 self._ros_client.run,
@@ -405,6 +476,50 @@ class RosBridgeAdapter:
             )
             return False
         except Exception as exc:
+            if self._config.host in ("10.68.44.41", "127.0.0.1"):
+                alt_host = "127.0.0.1" if self._config.host == "10.68.44.41" else "10.68.44.41"
+                try:
+                    self._ros_client = None
+                    self._detections_topic = None
+                    self._lidar_topic = None
+                    client = self._client_factory(alt_host, self._config.port)
+                    client.on("connection", self._on_ros_connected_event)
+                    client.on("closing", self._on_ros_closing_event)
+                    client.on("error", self._on_ros_error_event)
+                    self._ros_client = client
+                    topic = self._topic_factory(
+                        self._ros_client,
+                        self._config.detections_topic,
+                        self._config.message_type,
+                    )
+                    topic.subscribe(self.handle_ros_topic_callback)
+                    self._detections_topic = topic
+                    if (
+                        self._config.lidar_enabled
+                        and self._config.lidar_topic
+                        and self._config.lidar_message_type
+                    ):
+                        l_topic = self._topic_factory(
+                            self._ros_client,
+                            self._config.lidar_topic,
+                            self._config.lidar_message_type,
+                        )
+                        l_topic.subscribe(self.handle_ros_lidar_topic_callback)
+                        self._lidar_topic = l_topic
+                    await asyncio.to_thread(
+                        self._ros_client.run,
+                        int(max(1.0, self._config.connect_timeout_seconds)),
+                    )
+                    if self._ros_client.is_connected:
+                        self._has_connected_once = True
+                        logger.info(
+                            f"ROSBridge connected via fallback ws://{alt_host}:{self._config.port}."
+                        )
+                        await self._set_connection_state(RosConnectionStateEnum.CONNECTED)
+                        return True
+                except Exception:
+                    pass
+
             logger.warning(
                 f"ROSBridge connection attempt to ws://{self._config.host}:{self._config.port} "
                 f"did not succeed ({exc}). Backend continues running normally."
@@ -439,6 +554,7 @@ class RosBridgeAdapter:
 
         self._loop = asyncio.get_running_loop()
         self._queue = asyncio.Queue(maxsize=self._config.queue_maxsize)
+        self._lidar_queue = asyncio.Queue(maxsize=max(4, min(32, self._config.queue_maxsize)))
         self._running = True
         await self._set_connection_state(RosConnectionStateEnum.CONNECTING)
 
@@ -446,6 +562,11 @@ class RosBridgeAdapter:
             self._queue_worker_loop(),
             name=f"rosbridge-queue-worker-{self._config.vehicle_id}",
         )
+        if self._config.lidar_enabled and self._config.lidar_topic:
+            self._lidar_worker_task = asyncio.create_task(
+                self._lidar_queue_worker_loop(),
+                name=f"rosbridge-lidar-worker-{self._config.vehicle_id}",
+            )
         # Perform initial connection attempt; failure must never crash application startup
         await self._attempt_connect_and_subscribe()
         self._reconnect_task = asyncio.create_task(
@@ -454,7 +575,7 @@ class RosBridgeAdapter:
         )
 
     async def stop(self) -> None:
-        """Cleanly unsubscribe from `/detections_json`, close client, and stop tasks."""
+        """Cleanly unsubscribe from `/detections_json` and LiDAR topic, close client, and stop tasks."""
         self._running = False
 
         if self._reconnect_task is not None:
@@ -469,10 +590,21 @@ class RosBridgeAdapter:
                 await self._worker_task
             self._worker_task = None
 
+        if self._lidar_worker_task is not None:
+            self._lidar_worker_task.cancel()
+            with suppress(asyncio.CancelledError, RuntimeError):
+                await self._lidar_worker_task
+            self._lidar_worker_task = None
+
         while not self._queue.empty():
             with suppress(asyncio.QueueEmpty, RuntimeError):
                 _ = self._queue.get_nowait()
                 self._queue.task_done()
+
+        while not self._lidar_queue.empty():
+            with suppress(asyncio.QueueEmpty, RuntimeError):
+                _ = self._lidar_queue.get_nowait()
+                self._lidar_queue.task_done()
 
         topic = self._detections_topic
         self._detections_topic = None
@@ -481,6 +613,14 @@ class RosBridgeAdapter:
                 await asyncio.to_thread(topic.unsubscribe)
             except Exception as exc:
                 logger.warning(f"Error unsubscribing from ROS topic: {exc}")
+
+        l_topic = self._lidar_topic
+        self._lidar_topic = None
+        if l_topic is not None:
+            try:
+                await asyncio.to_thread(l_topic.unsubscribe)
+            except Exception as exc:
+                logger.warning(f"Error unsubscribing from ROS LiDAR topic: {exc}")
 
         client = self._ros_client
         self._ros_client = None

@@ -183,6 +183,7 @@ class PerceptionService:
             self._ros_adapter = ros_adapter
             self._ros_adapter.set_callbacks(
                 on_detection_message=self._handle_adapter_detection_callback,
+                on_lidar_message=self._handle_adapter_lidar_callback,
                 on_connection_state_change=self.handle_ros_connection_state_change,
             )
         else:
@@ -193,12 +194,18 @@ class PerceptionService:
                 vehicle_id=self._settings.ros_vehicle_id,
                 detections_topic=self._settings.ros_detections_topic,
                 message_type=self._settings.ros_detections_message_type,
+                lidar_enabled=self._settings.lidar_enabled,
+                lidar_topic=self._settings.lidar_topic or "/unilidar/cloud",
+                lidar_message_type=(
+                    self._settings.lidar_message_type or "sensor_msgs/msg/PointCloud2"
+                ),
                 queue_maxsize=self._settings.ros_queue_maxsize,
                 reconnect_interval_seconds=self._settings.ros_reconnect_interval_seconds,
             )
             self._ros_adapter = RosBridgeAdapter(
                 adapter_cfg,
                 on_detection_message=self._handle_adapter_detection_callback,
+                on_lidar_message=self._handle_adapter_lidar_callback,
                 on_connection_state_change=self.handle_ros_connection_state_change,
                 ros_client_factory=ros_client_factory,
                 ros_topic_factory=ros_topic_factory,
@@ -492,6 +499,66 @@ class PerceptionService:
     ) -> None:
         """Internal callback bridge returning None for RosBridgeAdapter."""
         await self.handle_raw_ros_message(raw_message)
+
+    async def _handle_adapter_lidar_callback(
+        self,
+        raw_message: dict[str, Any] | str,
+    ) -> None:
+        """Internal callback bridge forwarding incoming LiDAR `/unilidar/cloud` frames."""
+        await self.handle_raw_lidar_message(raw_message)
+
+    async def handle_raw_lidar_message(
+        self,
+        raw_message: dict[str, Any] | str,
+        *,
+        vehicle_id: VehicleIdEnum | str | None = None,
+    ) -> bool:
+        """Validate and forward a raw ROS 2 LiDAR (`PointCloud2` or scan dict) message to ULTRON and broadcast."""
+        import json as _json
+
+        target_vid = (
+            VehicleIdEnum(str(vehicle_id))
+            if vehicle_id is not None
+            else (self._ros_vehicle_id or VehicleIdEnum.SCOUT01)
+        )
+        tracker = self._trackers[target_vid]
+        now = self._clock.now()
+
+        if isinstance(raw_message, str):
+            try:
+                payload = _json.loads(raw_message)
+            except Exception as exc:
+                logger.warning(f"Rejected invalid JSON LiDAR message: {exc}")
+                return False
+        elif isinstance(raw_message, dict):
+            payload = raw_message
+        else:
+            return False
+
+        if not isinstance(payload, dict):
+            return False
+
+        if tracker.ros_connection_state in (
+            RosConnectionStateEnum.DISCONNECTED,
+            RosConnectionStateEnum.CONNECTING,
+            RosConnectionStateEnum.RECONNECTING,
+        ):
+            tracker.ros_connection_state = RosConnectionStateEnum.CONNECTED
+
+        if self._agent is not None and hasattr(
+            self._agent, "ingest_lidar_scan_into_world_model"
+        ):
+            outcome = self._agent.ingest_lidar_scan_into_world_model(
+                payload,
+                received_at=now,
+                vehicle_id=tracker.configured_vehicle_id,
+                telemetry_source=tracker.telemetry_source.value,
+            )
+            push_payload = self.get_vehicle_detection_state(target_vid)
+            await self._gateway.broadcast_detections(push_payload)
+            return bool(getattr(outcome, "accepted", False))
+
+        return False
 
     async def handle_raw_ros_message(
         self,

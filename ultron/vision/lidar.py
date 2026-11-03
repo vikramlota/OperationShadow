@@ -17,8 +17,10 @@ Architectural & Safety Guarantees:
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass, field
 import math
+import struct
 import time
 from typing import Any, Dict, List, Optional
 import uuid
@@ -31,6 +33,127 @@ from ultron.schemas.observations import (
     SensorTypeEnum,
 )
 from ultron.schemas.world import SensorHealthReport, SensorHealthStatusEnum
+
+
+def parse_pointcloud2_to_lidar_payload(
+    raw_message: Dict[str, Any],
+    *,
+    default_frame: str = "unilidar_lidar",
+    min_range_m: float = 0.05,
+    max_range_m: float = 30.0,
+) -> Dict[str, Any]:
+    """Convert a ROS 2 `sensor_msgs/msg/PointCloud2` dict (e.g. `/unilidar/cloud`) into a normalized LiDAR scan dict."""
+    msg = (
+        raw_message["msg"]
+        if raw_message.get("op") == "publish" and isinstance(raw_message.get("msg"), dict)
+        else raw_message
+    )
+    header = msg.get("header") if isinstance(msg.get("header"), dict) else {}
+    stamp = header.get("stamp", msg.get("stamp"))
+    frame = str(header.get("frame_id") or msg.get("frame") or default_frame or "unilidar_lidar").strip()
+
+    width = int(msg.get("width", 0) or 0)
+    height = int(msg.get("height", 1) or 1)
+    point_step = int(msg.get("point_step", 0) or 0)
+    row_step = int(msg.get("row_step", width * point_step) or (width * point_step))
+    is_bigendian = bool(msg.get("is_bigendian", False))
+    fields_raw = msg.get("fields", [])
+    data_raw = msg.get("data", b"")
+
+    if isinstance(data_raw, str):
+        raw_bytes = base64.b64decode(data_raw) if data_raw else b""
+    elif isinstance(data_raw, (bytes, bytearray)):
+        raw_bytes = bytes(data_raw)
+    elif isinstance(data_raw, list):
+        raw_bytes = bytes(int(b) & 0xFF for b in data_raw)
+    else:
+        raise ValueError(f"Unsupported PointCloud2 data type: {type(data_raw).__name__}")
+
+    total_points = width * height
+    if total_points <= 0 or point_step <= 0 or len(raw_bytes) < point_step:
+        return {
+            "stamp": stamp,
+            "frame": frame,
+            "obstacles": [],
+            "free_space_radius_m": round(max_range_m, 3),
+        }
+
+    field_offsets: Dict[str, tuple[int, int]] = {}
+    if isinstance(fields_raw, list):
+        for f in fields_raw:
+            if isinstance(f, dict) and isinstance(f.get("name"), str) and isinstance(f.get("offset"), int):
+                field_offsets[f["name"]] = (int(f["offset"]), int(f.get("datatype", 7)))
+
+    x_off, x_dt = field_offsets.get("x", (0, 7))
+    y_off, y_dt = field_offsets.get("y", (4, 7))
+    z_off, z_dt = field_offsets.get("z", (8, 7))
+    endian = ">" if is_bigendian else "<"
+    fmt_map = {7: "f", 8: "d"}
+    if x_dt not in fmt_map or y_dt not in fmt_map or z_dt not in fmt_map:
+        raise ValueError("PointCloud2 x/y/z fields must be FLOAT32 (7) or FLOAT64 (8).")
+
+    x_fmt = endian + fmt_map[x_dt]
+    y_fmt = endian + fmt_map[y_dt]
+    z_fmt = endian + fmt_map[z_dt]
+
+    max_samples = 600
+    stride = max(1, total_points // max_samples)
+    sector_closest: Dict[int, tuple[float, float, float, float]] = {}
+    min_any_range: Optional[float] = None
+    buf_len = len(raw_bytes)
+
+    idx = 0
+    for r_idx in range(height):
+        row_start = r_idx * row_step
+        for c_idx in range(width):
+            if idx % stride == 0:
+                pt_start = row_start + c_idx * point_step
+                if pt_start + max(x_off + 4, y_off + 4, z_off + 4) <= buf_len:
+                    x = float(struct.unpack_from(x_fmt, raw_bytes, pt_start + x_off)[0])
+                    y = float(struct.unpack_from(y_fmt, raw_bytes, pt_start + y_off)[0])
+                    z = float(struct.unpack_from(z_fmt, raw_bytes, pt_start + z_off)[0])
+                    if math.isfinite(x) and math.isfinite(y) and math.isfinite(z):
+                        # Filter out floor/ceiling returns outside rover vertical envelope
+                        if -0.45 <= z <= 1.8:
+                            rng = math.sqrt(x * x + y * y + z * z)
+                            if min_range_m <= rng <= max_range_m:
+                                if min_any_range is None or rng < min_any_range:
+                                    min_any_range = rng
+                                angle = math.atan2(y, x)
+                                sector = int(((angle + math.pi) / (2.0 * math.pi)) * 8.0) % 8
+                                prev = sector_closest.get(sector)
+                                if prev is None or rng < prev[3]:
+                                    sector_closest[sector] = (x, y, z, rng)
+            idx += 1
+
+    obstacles: List[Dict[str, Any]] = []
+    for sec_idx, (ox, oy, oz, orng) in sorted(sector_closest.items()):
+        obstacles.append(
+            {
+                "id": sec_idx,
+                "classification": "lidar_obstacle",
+                "confidence": 0.9,
+                "position": {
+                    "x": round(ox, 4),
+                    "y": round(oy, 4),
+                    "z": round(oz, 4),
+                },
+                "range_m": round(orng, 4),
+                "uncertainty_m": 0.05,
+            }
+        )
+
+    free_space = (
+        round(max(0.0, min_any_range - 0.2), 3)
+        if min_any_range is not None
+        else round(max_range_m, 3)
+    )
+    return {
+        "stamp": stamp,
+        "frame": frame,
+        "obstacles": obstacles,
+        "free_space_radius_m": free_space,
+    }
 
 
 @dataclass
@@ -226,6 +349,21 @@ class LidarIngestionAdapter:
         try:
             if not isinstance(payload, dict):
                 raise ValueError("LiDAR payload must be a dictionary.")
+
+            if "obstacles" not in payload and (
+                "point_step" in payload
+                or "fields" in payload
+                or (
+                    payload.get("op") == "publish"
+                    and isinstance(payload.get("msg"), dict)
+                )
+            ):
+                payload = parse_pointcloud2_to_lidar_payload(
+                    payload,
+                    default_frame=self.coordinate_frame or "unilidar_lidar",
+                    min_range_m=self.min_range_m,
+                    max_range_m=self.max_range_m,
+                )
 
             stamp_raw = payload.get("stamp")
             if isinstance(stamp_raw, dict) and "sec" in stamp_raw:

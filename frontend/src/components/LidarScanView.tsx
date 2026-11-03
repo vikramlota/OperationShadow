@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { ROSBRIDGE_URL } from "../api/client";
 
 const MAP_TOPIC = "/cloud_registered";
+const UNILIDAR_TOPIC = "/unilidar/cloud";
 const MAP_TYPE = "sensor_msgs/msg/PointCloud2";
 const PATH_TOPIC = "/path";
 const PATH_TYPE = "nav_msgs/msg/Path";
@@ -255,6 +256,16 @@ export function LidarScanView(): React.JSX.Element {
             queue_length: 1,
           }),
         );
+        socket.send(
+          JSON.stringify({
+            op: "subscribe",
+            id: "operation-shadow-scout-unilidar",
+            topic: UNILIDAR_TOPIC,
+            type: MAP_TYPE,
+            throttle_rate: 250,
+            queue_length: 1,
+          }),
+        );
       };
 
       socket.onmessage = (event: MessageEvent<string>) => {
@@ -263,7 +274,10 @@ export function LidarScanView(): React.JSX.Element {
           const message: unknown = JSON.parse(event.data);
           if (!isRecord(message)) return;
           if (message.op !== "publish") return;
-          if (message.topic === MAP_TOPIC && isRecord(message.msg)) {
+          if (
+            (message.topic === MAP_TOPIC || message.topic === UNILIDAR_TOPIC) &&
+            isRecord(message.msg)
+          ) {
             const frame = decodePointCloud(message.msg as PointCloud2Message);
             setMap((previous) => {
               const accumulated = new Map<string, Point2D>();

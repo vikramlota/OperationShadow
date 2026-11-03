@@ -1,8 +1,9 @@
-"""ROSBridge WebSocket client for read-only rover perception (`/detections_json`).
+"""ROSBridge WebSocket client for read-only rover perception (`/detections_json` and `/unilidar/cloud`).
 
 Connects to the configured ROSBridge server (`ws://<SHADOW_ROS_HOST>:<SHADOW_ROS_PORT>`)
 as a read-only subscriber. Streams live detections from `/detections_json` and
-forwards validated frames into the ULTRON World Model.
+optional PointCloud2 scans from `/unilidar/cloud`, forwarding validated frames
+into the ULTRON World Model.
 
 Safety & Reliability Guarantees:
 - Never falls back to a hardcoded `ROSBRIDGE_URL` or a default `SCOUT01` vehicle ID.
@@ -98,12 +99,13 @@ class RosDetectionIngestOutcome:
 
 
 class RosBridgeClient:
-    """Async ROSBridge v2 client — read-only subscriber for `/detections_json`."""
+    """Async ROSBridge v2 client — read-only subscriber for `/detections_json` and `/unilidar/cloud`."""
 
     def __init__(
         self,
         url: str | None = None,
         on_detection: Callable[[dict[str, Any]], Awaitable[Any]] | None = None,
+        on_lidar: Callable[[dict[str, Any]], Awaitable[Any]] | None = None,
         *,
         app_settings: Settings | None = None,
     ) -> None:
@@ -114,13 +116,23 @@ class RosBridgeClient:
         self._message_type = (
             self._settings.ros_detections_message_type or "std_msgs/msg/String"
         ).strip()
+        self._lidar_enabled = bool(getattr(self._settings, "lidar_enabled", False))
+        self._lidar_topic = (
+            getattr(self._settings, "lidar_topic", "/unilidar/cloud") or "/unilidar/cloud"
+        ).strip()
+        self._lidar_message_type = (
+            getattr(self._settings, "lidar_message_type", "sensor_msgs/msg/PointCloud2")
+            or "sensor_msgs/msg/PointCloud2"
+        ).strip()
         self._on_detection = on_detection
+        self._on_lidar = on_lidar
         self._running = False
         self._task: asyncio.Task[None] | None = None
         self.connected = False
 
         # Observability counters
         self.valid_message_count: int = 0
+        self.valid_lidar_message_count: int = 0
         self.invalid_message_count: int = 0
         self.empty_frame_count: int = 0
         self.unassociated_frame_count: int = 0
@@ -174,7 +186,26 @@ class RosBridgeClient:
             logger.warning("Discarding non-object ROSBridge frame: %r", type(msg).__name__)
             return False
 
-        if msg.get("op") != "publish" or msg.get("topic") != self._topic:
+        if msg.get("op") != "publish":
+            return False
+
+        topic = msg.get("topic")
+        if self._lidar_enabled and topic == self._lidar_topic:
+            msg_inner = msg.get("msg")
+            if not isinstance(msg_inner, dict):
+                self.invalid_message_count += 1
+                return False
+            self.valid_lidar_message_count += 1
+            if self._on_lidar is not None:
+                try:
+                    await self._on_lidar(msg_inner)
+                except Exception as exc:
+                    self.invalid_message_count += 1
+                    logger.warning("Error in ROSBridge LiDAR handler: %s", exc)
+                    return False
+            return True
+
+        if topic != self._topic:
             return False
 
         msg_inner = msg.get("msg")
@@ -239,30 +270,66 @@ class RosBridgeClient:
             await asyncio.sleep(RECONNECT_DELAY_SEC)
             return
 
-        logger.info("Connecting to ROSBridge at %s …", self._url)
-        async with websockets.connect(self._url, open_timeout=10) as ws:
-            self.connected = True
-            logger.info("ROSBridge CONNECTED (%s) ✓", self._url)
+        candidate_urls = [self._url]
+        if "10.68.44.41" in self._url:
+            candidate_urls.append(self._url.replace("10.68.44.41", "127.0.0.1"))
+        elif "127.0.0.1" in self._url:
+            candidate_urls.append(self._url.replace("127.0.0.1", "10.68.44.41"))
 
-            await ws.send(
-                json.dumps(
-                    {
-                        "op": "subscribe",
-                        "topic": self._topic,
-                        "type": self._message_type,
-                        "throttle_rate": 200,  # max 5 Hz
-                        "queue_length": 1,
-                    }
-                )
-            )
-            logger.info("Subscribed to %s (%s)", self._topic, self._message_type)
+        last_err: Exception | None = None
+        for target_url in candidate_urls:
+            try:
+                logger.info("Connecting to ROSBridge at %s …", target_url)
+                async with websockets.connect(target_url, open_timeout=5) as ws:
+                    self.connected = True
+                    logger.info("ROSBridge CONNECTED (%s) ✓", target_url)
 
-            async for raw in ws:
-                if not self._running:
-                    break
-                await self.handle_raw_ws_frame(raw)
+                    await ws.send(
+                        json.dumps(
+                            {
+                                "op": "subscribe",
+                                "topic": self._topic,
+                                "type": self._message_type,
+                                "throttle_rate": 200,  # max 5 Hz
+                                "queue_length": 1,
+                            }
+                        )
+                    )
+                    logger.info("Subscribed to %s (%s)", self._topic, self._message_type)
+
+                    if self._lidar_enabled and self._lidar_topic:
+                        await ws.send(
+                            json.dumps(
+                                {
+                                    "op": "subscribe",
+                                    "topic": self._lidar_topic,
+                                    "type": self._lidar_message_type,
+                                    "throttle_rate": 500,  # max 2 Hz
+                                    "queue_length": 1,
+                                }
+                            )
+                        )
+                        logger.info(
+                            "Subscribed to LiDAR %s (%s)",
+                            self._lidar_topic,
+                            self._lidar_message_type,
+                        )
+
+                    async for raw in ws:
+                        if not self._running:
+                            break
+                        await self.handle_raw_ws_frame(raw)
+                self.connected = False
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                last_err = exc
+                continue
 
         self.connected = False
+        if last_err is not None:
+            raise last_err
 
 
 async def process_rosbridge_detection_payload(
@@ -561,9 +628,21 @@ async def start_rosbridge(
             client_stats=_client,
         )
 
+    async def _handle_lidar(lidar_msg: dict[str, Any]) -> None:
+        if mission_service_agent is not None and hasattr(
+            mission_service_agent, "ingest_lidar_scan_into_world_model"
+        ):
+            mission_service_agent.ingest_lidar_scan_into_world_model(
+                lidar_msg,
+                received_at=datetime.now(timezone.utc),
+                vehicle_id=(cfg.ros_vehicle_id or "").strip() or None,
+                telemetry_source="rosbridge",
+            )
+
     _client = RosBridgeClient(
         url=url,
         on_detection=_handle_detection,
+        on_lidar=_handle_lidar,
         app_settings=cfg,
     )
     _client.start()

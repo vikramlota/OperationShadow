@@ -183,17 +183,64 @@ class UltronLangGraphAgent(UltronAgentPort):
                 ),
             },
         )
+        try:
+            from core.config import settings as _app_cfg
+
+            _lidar_enabled = bool(getattr(_app_cfg, "lidar_enabled", False))
+            _lidar_topic = str(getattr(_app_cfg, "lidar_topic", "") or "")
+            _lidar_msg_type = str(getattr(_app_cfg, "lidar_message_type", "") or "")
+            _lidar_frame = str(getattr(_app_cfg, "lidar_frame", "") or "")
+            _ros_enabled = bool(getattr(_app_cfg, "ros_enabled", False))
+            _ros_vid = str(getattr(_app_cfg, "ros_vehicle_id", "") or "") or None
+            _map_confirmed = bool(getattr(_app_cfg, "ros_map_frame_confirmed", False))
+            _extrinsics_confirmed = bool(
+                getattr(_app_cfg, "camera_lidar_extrinsics_confirmed", False)
+            )
+            _lidar_min_r = float(getattr(_app_cfg, "lidar_min_range_m", 0.05))
+            _lidar_max_r = float(getattr(_app_cfg, "lidar_max_range_m", 30.0))
+            _lidar_stale = float(getattr(_app_cfg, "lidar_stale_after_seconds", 2.0))
+        except Exception:
+            _lidar_enabled = False
+            _lidar_topic = ""
+            _lidar_msg_type = ""
+            _lidar_frame = ""
+            _ros_enabled = False
+            _ros_vid = None
+            _map_confirmed = False
+            _extrinsics_confirmed = False
+            _lidar_min_r = 0.05
+            _lidar_max_r = 30.0
+            _lidar_stale = 2.0
+
         self.camera_adapter = DepthCameraAdapter(
             enabled=True,
-            source_mode=SensorSourceModeEnum.SIMULATED,
+            source_mode=(
+                SensorSourceModeEnum.PHYSICAL
+                if _ros_enabled
+                else SensorSourceModeEnum.SIMULATED
+            ),
         )
         self.lidar_adapter = LidarIngestionAdapter(
-            enabled=False,
-            source_mode=SensorSourceModeEnum.SIMULATED,
+            enabled=_lidar_enabled,
+            topic=_lidar_topic,
+            message_type=_lidar_msg_type,
+            coordinate_frame=_lidar_frame,
+            vehicle_id=_ros_vid,
+            source_mode=(
+                SensorSourceModeEnum.PHYSICAL
+                if (_ros_enabled and _lidar_enabled)
+                else SensorSourceModeEnum.SIMULATED
+            ),
+            min_range_m=_lidar_min_r,
+            max_range_m=_lidar_max_r,
+            stale_after_sec=_lidar_stale,
         )
+        if _lidar_enabled and self.lidar_adapter.is_configured:
+            self.lidar_adapter.set_connection_state(True)
+            self._world.environment.sensor_health["lidar"] = self.lidar_adapter.get_health()
         self.transform_registry = FrameTransformRegistry(
-            map_frame_confirmed=False,
-            camera_lidar_extrinsics_confirmed=False,
+            map_frame_confirmed=_map_confirmed,
+            camera_lidar_extrinsics_confirmed=_extrinsics_confirmed,
         )
         self._observations: list[dict[str, Any]] = []
         self._unknown_transitions: list[tuple[VehicleId, datetime]] = []
@@ -1984,6 +2031,85 @@ class UltronLangGraphAgent(UltronAgentPort):
             )
 
         return created_obs
+
+    def ingest_lidar_scan_into_world_model(
+        self,
+        raw_scan: dict[str, Any],
+        *,
+        received_at: datetime | None = None,
+        vehicle_id: str | None = None,
+        telemetry_source: str = "rosbridge",
+    ) -> Any:
+        """Validate and ingest a LiDAR scan or `PointCloud2` (`/unilidar/cloud`) payload into ULTRON's `WorldModel`."""
+        now_dt = received_at or datetime.now(timezone.utc)
+        ingested_ts = now_dt.timestamp()
+        source_mode = (
+            SensorSourceModeEnum.PHYSICAL
+            if telemetry_source == "rosbridge"
+            else SensorSourceModeEnum.SIMULATED
+        )
+        if not self.lidar_adapter.enabled or not self.lidar_adapter.is_configured:
+            self.lidar_adapter.configure(
+                enabled=True,
+                topic=self.lidar_adapter.topic or "/unilidar/cloud",
+                message_type=(
+                    self.lidar_adapter.message_type or "sensor_msgs/msg/PointCloud2"
+                ),
+                coordinate_frame=(
+                    self.lidar_adapter.coordinate_frame or "unilidar_lidar"
+                ),
+                vehicle_id=vehicle_id or self.lidar_adapter.vehicle_id,
+                source_mode=source_mode,
+                connected=True,
+            )
+        else:
+            self.lidar_adapter.set_connection_state(True)
+
+        outcome = self.lidar_adapter.ingest_scan(
+            raw_scan,
+            ingested_at=ingested_ts,
+            source_mode=source_mode,
+        )
+        if outcome.sensor_health is not None:
+            self._world.environment.sensor_health["lidar"] = outcome.sensor_health
+
+        if not outcome.accepted:
+            return outcome
+
+        if outcome.free_space_radius_m is not None:
+            self._world.environment.free_space_coverage_m = outcome.free_space_radius_m
+
+        pre_fp = self._environment_fingerprint()
+        for obs in outcome.observations:
+            ingest_sensor_observation(
+                self._world,
+                obs,
+                transform_registry=self.transform_registry,
+            )
+        post_fp = self._environment_fingerprint()
+        active_mid = self._world.mission.id or self._active_mission_id
+
+        if (
+            outcome.observations
+            and not self._emergency_stopped
+            and self._world.mission.status == UltronMissionStatus.IN_PROGRESS
+            and self._active_plan is not None
+        ):
+            self._route_and_schedule_world_events(now_ts=ingested_ts)
+        elif outcome.observations and post_fp != pre_fp and active_mid:
+            self.memory_store.record_transition_snapshot(
+                self._world,
+                mission_id=active_mid,
+                timestamp=outcome.sensor_timestamp or ingested_ts,
+                trigger_type=SnapshotTriggerTypeEnum.SIGNIFICANT_OBSERVATION_ACCEPTED,
+                trigger_reason=(
+                    f"LiDAR scan ingested ({len(outcome.observations)} obstacle sector(s) in frame '{outcome.coordinate_frame}')"
+                ),
+                phase=SnapshotPhaseEnum.STATE_TRANSITION,
+                task_states=self._active_task_specs,
+            )
+
+        return outcome
 
     async def record_observation(
         self,

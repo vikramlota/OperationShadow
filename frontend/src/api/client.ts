@@ -13,12 +13,16 @@ export const WS_DASHBOARD_URL: string =
 export const WS_SCOUT_CONTROL_URL: string =
   import.meta.env.VITE_WS_CONTROL_URL ?? "ws://localhost:8000/ws/scout/control";
 
-export const DEFAULT_SCOUT_STREAM_URL: string =
-  import.meta.env.VITE_SCOUT01_STREAM_URL ??
-  "http://192.0.2.41:8081/stream.mjpg";
+const isTestEnv = import.meta.env.MODE === "test";
 
-export const ROSBRIDGE_URL: string =
-  import.meta.env.VITE_ROSBRIDGE_URL ?? "ws://192.0.2.41:9090";
+export const DEFAULT_SCOUT_STREAM_URL: string = isTestEnv
+  ? "http://192.0.2.41:8081/stream.mjpg"
+  : (import.meta.env.VITE_SCOUT01_STREAM_URL ??
+    "http://192.0.2.41:8081/stream.mjpg");
+
+export const ROSBRIDGE_URL: string = isTestEnv
+  ? "ws://192.0.2.41:9090"
+  : (import.meta.env.VITE_ROSBRIDGE_URL ?? "ws://192.0.2.41:9090");
 
 export type VehicleId = "SCOUT01";
 export type EmergencyStopTarget = "ALL" | "SCOUT01";
