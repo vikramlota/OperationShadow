@@ -1,5 +1,14 @@
 # Bugfix Requirements Document
 
+> **Superseded by Phase 1 Decision (2026-11-03):**
+> The 45-second SSL handshake timeout (2.6) and multi-step 1s/2s/4s exponential backoff retries (2.5) proposed below conflict with the hackathon demo requirement for a fast, deterministic fallback within ~10 seconds.
+>
+> **Phase 1 Implementation Decision:**
+> - **Hard Wall-Clock Deadline**: `SHADOW_LLM_PLANNING_TIMEOUT_SEC=10` (default 10s), `SHADOW_LLM_REPLANNING_TIMEOUT_SEC=8` (default 8s), and `SHADOW_LLM_CONNECT_TIMEOUT_SEC=3` (default 3s) are read at call time and enforced via a `ThreadPoolExecutor` wall-clock timeout covering all attempts for one planner invocation.
+> - **Bounded Single Retry**: At most **one** retry is allowed, **only** for connection-class errors (`dns`, `tcp_connect`, `tls_handshake`), and **only** when at least 40% of the wall-clock budget remains.
+> - **Circuit Breaker**: After any timeout or connection failure, a thread-safe module-level circuit breaker (`SHADOW_LLM_BREAKER_COOLDOWN_SEC=30`) opens so validation-loop retries (`route_validation`) and subsequent replans skip Gemini and fall back to `build_evidence_grounded_plan` immediately.
+> - **Diagnostics CLI**: Provided via `python -m ultron.diagnostics`.
+
 ## Introduction
 
 The ULTRON agent module fails to connect to the Gemini API due to SSL handshake timeout errors, preventing dynamic mission plan generation. All LLM planning calls fail with `_ssl.c:1064: The handshake operation timed out`, forcing the system to operate in degraded mode using only cached/pre-recorded plans. This bugfix addresses the connection reliability, diagnostic visibility, and error recovery mechanisms to ensure the ULTRON agent can successfully generate mission-specific plans and respond dynamically to changing mission conditions.

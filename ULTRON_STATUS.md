@@ -30,9 +30,9 @@ FastAPI Backend (port 8000)
 ✅ **LangGraph State Machine**: Built successfully
 ✅ **Hardware Lockout**: Enabled by default (`SHADOW_HARDWARE_LOCKOUT=true` in `core/config.py` and `.env.example`)
 ✅ **Vehicle Mode**: Simulated by default (`SHADOW_DEFAULT_VEHICLE_MODE=simulated` in `core/config.py` and `.env.example`)
-✅ **LLM Model**: `gemini-3.5-flash-lite`
-✅ **Planning Timeout**: 30 seconds
-✅ **Replanning Timeout**: 20 seconds
+✅ **LLM Model**: `gemini-2.5-flash`
+✅ **Planning Timeout**: 10 seconds (`SHADOW_LLM_PLANNING_TIMEOUT_SEC=10`)
+✅ **Replanning Timeout**: 8 seconds (`SHADOW_LLM_REPLANNING_TIMEOUT_SEC=8`)
 
 > **Note:** Repository code (`core/config.py`) and `.env.example` default to `SHADOW_HARDWARE_LOCKOUT=true`, `SHADOW_DEFAULT_VEHICLE_MODE=simulated`, `SHADOW_SCOUT_SERIAL_ENABLED=false`, and `SHADOW_SCOUT_SERIAL_FAILSAFE_VERIFIED=false`. A developer's local `.env` may differ from `.env.example` and must be checked before starting the backend.
 
@@ -162,7 +162,7 @@ Watch for these log messages:
 ```
 INFO:     Operation Shadow backend initialized.
 INFO:     UltronLangGraphAgent initialized
-INFO:     Planning engine ready (Gemini: gemini-3.5-flash-lite)
+INFO:     Planning engine ready (Gemini: gemini-2.5-flash)
 INFO:     Safety validator active
 INFO:     World Model initialized (SCOUT01: ONLINE)
 ```

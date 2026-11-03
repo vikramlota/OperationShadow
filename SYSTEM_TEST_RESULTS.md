@@ -253,9 +253,9 @@ SCOUT01_ROSBRIDGE_WS=ws://10.241.171.41:9090
 ```
 
 **ULTRON**:
-- LLM Model: `gemini-3.5-flash-lite`
-- Planning Timeout: 30s
-- Replanning Timeout: 20s
+- LLM Model: `gemini-2.5-flash`
+- Planning Timeout: 10s (`SHADOW_LLM_PLANNING_TIMEOUT_SEC`)
+- Replanning Timeout: 8s (`SHADOW_LLM_REPLANNING_TIMEOUT_SEC`)
 - Mode: Real LangGraph agent (not stub)
 
 ---
