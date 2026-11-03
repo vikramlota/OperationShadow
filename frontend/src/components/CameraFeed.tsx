@@ -177,11 +177,11 @@ export function CameraFeed(): React.JSX.Element {
         >
           <div className="reticle-corners" />
 
-          {/* Tactical Optical HUD Overlay */}
+          {/* Optical Stream Status Overlay */}
           <div className="camera-overlay">
             <div className="camera-overlay-top">
               <span style={{ color: "var(--marker-scout)", fontWeight: 500 }}>
-                HDG: 042° NE // 30 FPS
+                SCOUT01 OPTICS // READ-ONLY STREAM
               </span>
               <span
                 className={`badge ${activeUrl || rosStatus === "live" ? "badge-nominal" : "badge-warning"}`}

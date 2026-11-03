@@ -265,7 +265,7 @@ export function FloorMap(): React.JSX.Element {
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           <h2 className="panel-title">
             {activeLayer === "floor"
-              ? `TACTICAL MAP // ${activeMap.coordinate_system.toUpperCase()}`
+              ? `OPERATIONS MAP // ${activeMap.coordinate_system.toUpperCase()}`
               : "SCOUT01 // LIVE 2D SLAM PROJECTION"}
           </h2>
           {activeLayer === "floor" && activeMap.is_provisional_simulation_config && (

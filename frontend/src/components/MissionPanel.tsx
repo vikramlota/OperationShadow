@@ -260,7 +260,7 @@ export function MissionPanel(): React.JSX.Element {
             >
               {state.hardwareLockout
                 ? "ULTRON PLANNING + SAFETY VALIDATION RUN ON DISPATCH // SIMULATED ONLY"
-                : "ULTRON PLANNING + SAFETY VALIDATION // LIVE SERIAL EXECUTION ON SCOUT01"}
+                : "ULTRON PLANNING + SAFETY VALIDATION // SUPERVISED SERIAL DISPATCH ON SCOUT01"}
             </div>
             <div
               style={{

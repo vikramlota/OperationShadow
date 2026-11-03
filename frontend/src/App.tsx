@@ -157,10 +157,10 @@ export default function App({
         <ScoutKeyboardControl />
       </aside>
 
-      {/* 3. Center Column: Dominant Tactical Indoor Floor Map */}
+      {/* 3. Center Column: Operations Indoor Floor Map & Live 2D LiDAR View */}
       <FloorMap />
 
-      {/* 4. Right Rail: Direct Optical Feed, Vehicle Inspector & ROS Perception */}
+      {/* 4. Right Rail: Direct SCOUT01 Optical Feed, Vehicle Inspector & ROS Perception */}
       <aside className="right-rail" aria-label="Vehicle Inspector and Optical Feeds">
         <CameraFeed />
         <VehicleStatusCard vehicle={scout} />

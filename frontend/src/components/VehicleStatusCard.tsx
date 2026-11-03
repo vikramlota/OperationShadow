@@ -126,7 +126,7 @@ export function VehicleStatusCard({
         <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
           <h3 className="panel-title">{vehicle.id}</h3>
           <span className="badge" style={{ fontSize: "9px", padding: "1px 5px" }}>
-            {vehicle.vehicleType === "ground" ? "ROVER" : "DRONE"}
+            {vehicle.vehicleType === "ground" ? "ROVER" : "AERIAL (SIM)"}
           </span>
         </div>
         <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>

@@ -1,5 +1,5 @@
-/* Operation Shadow — Aerospace Tactical Command & Control Design System
- * Implements approved design specification: design-system-proposal.md
+/* Operation Shadow — Robotics Mission-Control & Tactical Operations Console Design System
+ * Implements approved design specification: docs/ui-design-spec.md & docs/PRODUCT_LANGUAGE.md
  */
 
 /* ====================================================================
@@ -33,19 +33,19 @@
   --status-critical-bright: #E04040;
   --status-critical-muted:  #2C1818;
 
-  /* Tactical Accents */
+  /* Operational Accents */
   --accent-primary: #5A8A6A;
   --accent-hover:   #6A9A7A;
   --accent-active:  #4A7A5A;
   --marker-scout:   #7AAA8A;
-  --marker-hawk:    #7A9A95;
+  --marker-hawk:    #7A9A95; /* Retained for simulated / roadmap HAWK01 compatibility */
 
   /* Typography */
   --font-display: 'Michroma', sans-serif;
   --font-ui:      'Space Grotesk', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-data:    'IBM Plex Mono', 'SF Mono', 'Menlo', 'Consolas', monospace;
 
-  /* Legacy CSS Variable Compatibility */
+  /* Legacy CSS Variable Compatibility (--accent-military maps to Operational Olive) */
   --bg-canvas: var(--sf-void);
   --bg-panel: var(--sf-raised);
   --bg-panel-header: var(--sf-elevated);
