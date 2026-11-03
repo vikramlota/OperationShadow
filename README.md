@@ -121,7 +121,7 @@ operation-shadow/
 - `GET /map` — Retrieve static indoor floor-plan configuration (labeled provisional simulation config).
 - `POST /emergency-stop` — Dedicated Emergency Stop Fast Path (`ALL` or `SCOUT01`) bypassing ULTRON and synchronous DB writes, with explicit per-vehicle dispatch/ack/stop-confirmation evidence and async post-dispatch audit logging.
 - `WS /ws/dashboard` — Push-only dashboard WebSocket streaming an initial `snapshot` envelope (including `detections`) followed by live `telemetry`, `detections`, `event`, `reasoning_trace`, and `mission_status` envelopes.
-- `GET /scout/control/status` and `WS /ws/scout/control` — W/A/S/D/X keyboard control. By default this is simulation-only. Optional USB serial output writes one uppercase ASCII command byte with no newline at 115200 baud, matching the hardware-team transmitter sketch. Serial remains disabled unless `SHADOW_SCOUT_SERIAL_ENABLED=true`, real vehicle mode is selected, `SHADOW_HARDWARE_LOCKOUT=false`, and `SHADOW_SCOUT_SERIAL_FAILSAFE_VERIFIED=true`.
+- `GET /scout/control/status` and `WS /ws/scout/control` — W/A/S/D/X keyboard control. By default this is simulation-only (`SHADOW_HARDWARE_LOCKOUT=true`, `SHADOW_DEFAULT_VEHICLE_MODE=simulated`, `SHADOW_SCOUT_SERIAL_ENABLED=false`, `SHADOW_SCOUT_SERIAL_FAILSAFE_VERIFIED=false`). Optional USB serial output writes one uppercase ASCII command byte with no newline at 115200 baud, matching the hardware-team transmitter sketch. Serial remains disabled unless serial output is enabled, real vehicle mode is selected, hardware lockout is disabled, and the USB-loss failsafe is verified by a human (see `docs/SUPERVISED_REAL_MODE.md`).
 
 The serial writer does not change transmitter firmware and does not guarantee a stop after USB loss. The provided firmware continues broadcasting its last motor command if serial input stops; therefore keep the serial and hardware gates disabled until an independent transmitter/receiver failsafe on USB loss is verified. Do not use the provisional `hardware/scout/communication/serial_bridge.py` motor frame as this transmitter's protocol.
 
@@ -146,7 +146,7 @@ Copy `.env.example` to `.env` in the repository root (or inside `backend/`):
 ```bash
 cp .env.example .env
 ```
-By default, `SHADOW_HARDWARE_LOCKOUT=true`, `SHADOW_DEFAULT_VEHICLE_MODE=simulated`, and `SHADOW_ROS_ENABLED=false` are configured so physical hardware control remains locked out and the mock fleet works out of the box.
+By default, `SHADOW_HARDWARE_LOCKOUT=true`, `SHADOW_DEFAULT_VEHICLE_MODE=simulated`, `SHADOW_SCOUT_SERIAL_ENABLED=false`, `SHADOW_SCOUT_SERIAL_FAILSAFE_VERIFIED=false`, and `SHADOW_ROS_ENABLED=false` are configured so physical hardware control remains locked out and the mock fleet works out of the box. Note that a developer's local `.env` may differ from `.env.example` and must be checked before starting the backend.
 
 ### 2. Backend Setup, Database Initialization & Run
 ```bash

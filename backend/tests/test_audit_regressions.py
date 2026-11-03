@@ -812,3 +812,63 @@ async def test_dashboard_snapshot_returns_most_recent_50_events_in_chronological
         assert len(events) == 50
         assert events[0].id == "EVT-SNAP-015"
         assert events[-1].id == "EVT-SNAP-064"
+
+
+def test_startup_safety_and_secret_warnings_logged(caplog: pytest.LogCaptureFixture) -> None:
+    """Verify loud WARNING logs when lockout is off/mode is real or shared secret is placeholder on non-127.0.0.1 host."""
+    import logging
+    from types import SimpleNamespace
+    from main import log_startup_safety_warnings
+
+    sec_logger = logging.getLogger("operation_shadow")
+    old_propagate = sec_logger.propagate
+    sec_logger.propagate = True
+    try:
+        # 1. Default safe settings on 127.0.0.1 -> no WARNING
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="operation_shadow.main"):
+            log_startup_safety_warnings(
+                SimpleNamespace(
+                    hardware_lockout=True,
+                    default_vehicle_mode="simulated",
+                    scout_serial_enabled=False,
+                    scout_serial_failsafe_verified=False,
+                    host="127.0.0.1",
+                    vehicle_shared_secret="provisional_secret_change_me",
+                )
+            )
+        assert not caplog.records
+
+        # 2. Placeholder secret on non-127.0.0.1 host -> SECURITY WARNING
+        for placeholder in ("provisional_secret_change_me", "change-me-local-demo-secret"):
+            caplog.clear()
+            with caplog.at_level(logging.WARNING, logger="operation_shadow.main"):
+                log_startup_safety_warnings(
+                    SimpleNamespace(
+                        hardware_lockout=True,
+                        default_vehicle_mode="simulated",
+                        scout_serial_enabled=False,
+                        scout_serial_failsafe_verified=False,
+                        host="0.0.0.0",
+                        vehicle_shared_secret=placeholder,
+                    )
+                )
+            assert any("SECURITY WARNING" in r.message for r in caplog.records)
+
+        # 3. Lockout off or real mode -> SAFETY WARNING
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="operation_shadow.main"):
+            log_startup_safety_warnings(
+                SimpleNamespace(
+                    hardware_lockout=not True,
+                    default_vehicle_mode="simulated",
+                    scout_serial_enabled=False,
+                    scout_serial_failsafe_verified=False,
+                    host="127.0.0.1",
+                    vehicle_shared_secret="custom-strong-secret",
+                )
+            )
+        assert any("SAFETY WARNING" in r.message for r in caplog.records)
+    finally:
+        sec_logger.propagate = old_propagate
+

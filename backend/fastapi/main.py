@@ -43,6 +43,37 @@ from websocket.vehicle_gateway import (
 
 logger = get_logger("main")
 
+_PLACEHOLDER_VEHICLE_SECRETS = frozenset(
+    {"provisional_secret_change_me", "change-me-local-demo-secret"}
+)
+
+
+def log_startup_safety_warnings(active_settings: object | None = None) -> None:
+    """Emit structured WARNING logs at startup for non-default safety posture or placeholder secrets on non-loopback hosts."""
+    cfg = active_settings if active_settings is not None else settings
+    hardware_lockout = getattr(cfg, "hardware_lockout", True)
+    default_vehicle_mode = getattr(cfg, "default_vehicle_mode", "simulated")
+    scout_serial_enabled = getattr(cfg, "scout_serial_enabled", False)
+    scout_serial_failsafe_verified = getattr(cfg, "scout_serial_failsafe_verified", False)
+    host = getattr(cfg, "host", "127.0.0.1")
+    vehicle_shared_secret = getattr(cfg, "vehicle_shared_secret", "")
+
+    if not hardware_lockout or default_vehicle_mode == "real":
+        logger.warning(
+            "SAFETY WARNING: Hardware lockout is disabled or default vehicle mode is real "
+            f"(hardware_lockout={hardware_lockout}, default_vehicle_mode={default_vehicle_mode!r}, "
+            f"scout_serial_enabled={scout_serial_enabled}, "
+            f"scout_serial_failsafe_verified={scout_serial_failsafe_verified}). "
+            "Ensure physical E-Stop and docs/SUPERVISED_REAL_MODE.md preconditions are satisfied."
+        )
+
+    if host != "127.0.0.1" and vehicle_shared_secret in _PLACEHOLDER_VEHICLE_SECRETS:
+        logger.warning(
+            "SECURITY WARNING: SHADOW_VEHICLE_SHARED_SECRET is still a placeholder value while "
+            f"host={host!r} is not 127.0.0.1. Rotate SHADOW_VEHICLE_SHARED_SECRET before exposing "
+            "vehicle or webhook endpoints on a non-loopback interface."
+        )
+
 
 class HealthResponse(BaseModel):
     """Health check response schema."""
@@ -105,6 +136,7 @@ def create_app(
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         """Initialize SQLite metadata and ROSBridge subscriber on startup; clean up on shutdown."""
         configure_logging()
+        log_startup_safety_warnings(settings)
         await init_db(db_engine)
         await active_perception_svc.start()
         await active_scout_control_simulator.start()

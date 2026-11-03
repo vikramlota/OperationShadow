@@ -11,7 +11,7 @@
 |-----------|--------|---------|
 | Backend API | ✅ PASS | Running on port 8000 |
 | ULTRON Agent | ✅ PASS | Real LangGraph agent active (not stub) |
-| Hardware Control | ✅ PASS | Enabled (real mode, lockout disabled) |
+| Hardware Control | 🔒 LOCKED (Default) | Repository default is simulated mode with hardware lockout enabled (`SHADOW_HARDWARE_LOCKOUT=true`, `SHADOW_DEFAULT_VEHICLE_MODE=simulated`); local `.env` may differ and must be checked |
 | SCOUT01 Network | ✅ PASS | Reachable at 10.241.171.41 (~18ms latency) |
 | Camera Stream | ✅ PASS | MJPEG streaming on port 8081 |
 | ROSBridge | ✅ PASS | WebSocket port 9090 open |
@@ -52,11 +52,11 @@ curl -X POST http://localhost:8000/mission \
 - Status: Actively streaming
 - Can be viewed directly in browser or dashboard
 
-### 4. Hardware Configuration
-- Hardware lockout: **DISABLED**
-- Vehicle mode: **real**
-- Commands will be sent to physical SCOUT01
-- Serial communication enabled (backup channel)
+### 4. Hardware Configuration & Safety Defaults
+- Repository default hardware lockout (`core/config.py`, `.env.example`): **ENABLED** (`SHADOW_HARDWARE_LOCKOUT=true`)
+- Repository default vehicle mode: **simulated** (`SHADOW_DEFAULT_VEHICLE_MODE=simulated`)
+- Repository default serial control: **DISABLED** (`SHADOW_SCOUT_SERIAL_ENABLED=false`, `SHADOW_SCOUT_SERIAL_FAILSAFE_VERIFIED=false`)
+- **Important**: A developer's local `.env` may differ from the repository defaults and must always be checked before starting the backend. See `docs/SUPERVISED_REAL_MODE.md` for required human-verified preconditions before enabling real hardware.
 
 ---
 
@@ -236,13 +236,17 @@ curl "http://localhost:8000/mission/$MISSION_ID"
 
 ---
 
-## 📊 System Configuration
+## 📊 System Configuration (Safe Repository Defaults)
 
-**Backend** (`/home/vikram/Projects/Project CU/.env`):
+> **Note:** A developer's local `.env` may differ from `.env.example` and must be checked before launching the system.
+
+**Backend Defaults** (`.env.example` / `core/config.py`):
 ```
-SHADOW_HARDWARE_LOCKOUT=false
-SHADOW_DEFAULT_VEHICLE_MODE=real
-SHADOW_ROSBRIDGE_ENABLED=true
+SHADOW_HARDWARE_LOCKOUT=true
+SHADOW_DEFAULT_VEHICLE_MODE=simulated
+SHADOW_SCOUT_SERIAL_ENABLED=false
+SHADOW_SCOUT_SERIAL_FAILSAFE_VERIFIED=false
+SHADOW_ROSBRIDGE_ENABLED=false
 SCOUT01_IP=10.241.171.41
 SCOUT01_CAMERA_URL=http://10.241.171.41:8081/stream.mjpg
 SCOUT01_ROSBRIDGE_WS=ws://10.241.171.41:9090

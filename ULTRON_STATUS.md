@@ -28,11 +28,13 @@ FastAPI Backend (port 8000)
 
 ✅ **Module Import**: ULTRON successfully imports from `ultron/`
 ✅ **LangGraph State Machine**: Built successfully
-✅ **Hardware Lockout**: Disabled (`False`)
-✅ **Vehicle Mode**: Real hardware (`real`)
+✅ **Hardware Lockout**: Enabled by default (`SHADOW_HARDWARE_LOCKOUT=true` in `core/config.py` and `.env.example`)
+✅ **Vehicle Mode**: Simulated by default (`SHADOW_DEFAULT_VEHICLE_MODE=simulated` in `core/config.py` and `.env.example`)
 ✅ **LLM Model**: `gemini-3.5-flash-lite`
 ✅ **Planning Timeout**: 30 seconds
 ✅ **Replanning Timeout**: 20 seconds
+
+> **Note:** Repository code (`core/config.py`) and `.env.example` default to `SHADOW_HARDWARE_LOCKOUT=true`, `SHADOW_DEFAULT_VEHICLE_MODE=simulated`, `SHADOW_SCOUT_SERIAL_ENABLED=false`, and `SHADOW_SCOUT_SERIAL_FAILSAFE_VERIFIED=false`. A developer's local `.env` may differ from `.env.example` and must be checked before starting the backend.
 
 ---
 
@@ -145,10 +147,11 @@ curl -X POST http://localhost:8000/mission \
 - **Workaround**: System operates in degraded mode using pre-recorded plans
 - **Fix**: Bugfix workflow was started but paused per your request
 
-### ✅ Hardware Control Enabled
-- Real hardware mode is active
-- Commands will be sent to physical SCOUT01
-- Ensure physical E-Stop is functional
+### 🔒 Hardware Lockout & Simulated Mode Default
+- Hardware lockout is enabled by default (`SHADOW_HARDWARE_LOCKOUT=true`)
+- Default vehicle mode is `simulated` (`SHADOW_DEFAULT_VEHICLE_MODE=simulated`)
+- Physical serial control (`SHADOW_SCOUT_SERIAL_ENABLED=false`, `SHADOW_SCOUT_SERIAL_FAILSAFE_VERIFIED=false`) is disabled by default
+- A developer's local `.env` may differ and must be checked before starting the backend (see `docs/SUPERVISED_REAL_MODE.md`)
 
 ---
 
@@ -193,7 +196,7 @@ python ultron/main.py
 
 **ULTRON Status**: ✅ Ready
 **Integration**: ✅ Embedded in FastAPI backend
-**Configuration**: ✅ Real hardware mode enabled
+**Configuration**: ✅ Simulated mode default (`SHADOW_HARDWARE_LOCKOUT=true`, `SHADOW_DEFAULT_VEHICLE_MODE=simulated`; verify local `.env`)
 **LangGraph**: ✅ Built and functional
 **Planning Engine**: ⚠️ Using cached plans (API timeout issue)
 

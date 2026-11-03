@@ -7,8 +7,8 @@
 set -e
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON="/home/vikram/aiml/bin/python"
-UVICORN="/home/vikram/aiml/bin/uvicorn"
+PYTHON="${PYTHON:-python3}"
+UVICORN="${UVICORN:-uvicorn}"
 
 # ── Colour helpers ────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'; AMBER='\033[0;33m'; RED='\033[0;31m'; NC='\033[0m'
@@ -25,13 +25,13 @@ echo ""
 # ── Pre-flight checks ─────────────────────────────────────────────────────────
 info "Running pre-flight checks..."
 
-if [ ! -f "$PYTHON" ]; then
-    error "Python not found at $PYTHON. Is the aiml venv built?"
+if ! command -v "$PYTHON" >/dev/null 2>&1 && [ ! -f "$PYTHON" ]; then
+    error "Python not found at $PYTHON. Set PYTHON or activate your virtualenv."
     exit 1
 fi
 
-if [ ! -f "$UVICORN" ]; then
-    error "uvicorn not found at $UVICORN. Run: pip install uvicorn inside aiml env."
+if ! command -v "$UVICORN" >/dev/null 2>&1 && [ ! -f "$UVICORN" ]; then
+    error "uvicorn not found at $UVICORN. Run: pip install uvicorn or set UVICORN."
     exit 1
 fi
 
