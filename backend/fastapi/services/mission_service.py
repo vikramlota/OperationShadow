@@ -1,4 +1,4 @@
-"""Mission lifecycle, physical SCOUT01 serial execution, dead-reckoning map tracking, and replay service (§3, §4, §7 + Phase 3 Mission Memory).
+"""Mission lifecycle, physical SCOUT01 serial execution, dead-reckoning map tracking, and replay service (§3, §4, §7 + Phase 3 Mission Memory & Replay).
 
 Uses `UltronAgentPort` (`UltronLangGraphAgent` / `StubUltronAgent`) for mission creation
 and task decomposition, persists `Mission`, `Task`, `Event`, `ReasoningTrace`, and
@@ -952,23 +952,68 @@ class MissionService:
             tasks=[TaskRead.model_validate(t) for t in sorted_tasks],
         )
 
+    @staticmethod
+    def _summarize_snapshot_state(snap: dict[str, Any]) -> dict[str, Any]:
+        """Extract a clean, structured historical state summary from a persisted `MissionMemorySnapshot` dict."""
+        prov = snap.get("evidence_provenance") or {}
+        return {
+            "snapshot_id": snap.get("snapshot_id"),
+            "sequence": snap.get("sequence"),
+            "timestamp": snap.get("timestamp"),
+            "timestamp_iso": snap.get("timestamp_iso"),
+            "phase": snap.get("phase"),
+            "trigger_type": snap.get("trigger_type"),
+            "trigger_reason": snap.get("trigger_reason"),
+            "mission_status": snap.get("mission_status"),
+            "mission_objective": snap.get("mission_objective"),
+            "tasks": list(snap.get("task_states", [])),
+            "active_task_ids": dict(snap.get("active_task_ids", {})),
+            "completed_task_ids": list(snap.get("completed_task_ids", [])),
+            "pending_task_ids": list(snap.get("pending_task_ids", [])),
+            "vehicles": dict(snap.get("vehicles", {})),
+            "tracked_objects": list(snap.get("tracked_objects", [])),
+            "hazards": list(snap.get("hazards", [])),
+            "known_obstacles": list(snap.get("known_obstacles", [])),
+            "observation_refs": list(snap.get("observation_refs", [])),
+            "total_observation_count": int(snap.get("total_observation_count", 0)),
+            "sensor_health": dict(snap.get("sensor_health", {})),
+            "evidence_provenance": dict(prov),
+            "unknowns": list(prov.get("unknowns", [])),
+        }
+
     async def get_mission_replay(
         self,
         session: AsyncSession,
         mission_id: str,
     ) -> MissionReplayResponse:
-        """Build ordered timeline of events and reasoning traces (§7: GET /mission/{id}/replay)."""
+        """Build deterministic chronological replay timeline with persisted before/after World Model snapshots (§7, Phase 3)."""
         mission_exists = (
             await session.execute(select(Mission.id).where(Mission.id == mission_id))
         ).scalar_one_or_none()
         if mission_exists is None:
             raise ResourceNotFoundError("Mission", mission_id)
 
+        # Flush any buffered in-memory routed events, traces, replanned tasks, or snapshots for this mission
+        if hasattr(self._agent, "sync_event_intelligence_to_event_service"):
+            try:
+                await self._agent.sync_event_intelligence_to_event_service(
+                    session,
+                    self._events,
+                    mission_id=mission_id,
+                    broadcast=False,
+                )
+            except Exception as exc:
+                logger.error(
+                    f"Failed to sync buffered event intelligence before replay for {mission_id}: {exc}"
+                )
+        await self._persist_unsynced_agent_snapshots(session, mission_id, commit=True)
+
         event_rows = (
             await session.execute(
                 select(Event)
                 .where(Event.mission_id == mission_id)
                 .order_by(Event.timestamp.asc(), Event.id.asc())
+                .limit(250)
             )
         ).scalars().all()
 
@@ -977,32 +1022,173 @@ class MissionService:
                 select(ReasoningTrace)
                 .where(ReasoningTrace.mission_id == mission_id)
                 .order_by(ReasoningTrace.timestamp.asc(), ReasoningTrace.id.asc())
+                .limit(250)
             )
         ).scalars().all()
+
+        persisted_snapshots: list[dict[str, Any]] = []
+        if hasattr(self._events, "list_mission_snapshots"):
+            persisted_snapshots = await self._events.list_mission_snapshots(
+                session, mission_id, limit=250
+            )
+
+        snapshots_by_id: dict[str, dict[str, Any]] = {}
+        snapshots_by_trace_id: dict[str, dict[str, Any]] = {}
+        before_snapshots_by_event_id: dict[str, dict[str, Any]] = {}
+        event_snapshots_by_event_id: dict[str, dict[str, Any]] = {}
+
+        for snap in persisted_snapshots:
+            sid = str(snap.get("snapshot_id", ""))
+            if not sid:
+                continue
+            snapshots_by_id[sid] = snap
+            assoc_tid = snap.get("associated_trace_id")
+            if assoc_tid:
+                if (
+                    assoc_tid not in snapshots_by_trace_id
+                    or snap.get("phase") == "AFTER"
+                ):
+                    snapshots_by_trace_id[str(assoc_tid)] = snap
+
+            assoc_eid = snap.get("associated_event_id")
+            if assoc_eid:
+                eid_str = str(assoc_eid)
+                if snap.get("phase") == "BEFORE":
+                    before_snapshots_by_event_id[eid_str] = snap
+                if (
+                    eid_str not in event_snapshots_by_event_id
+                    or snap.get("phase") in ("BEFORE", "STATE_TRANSITION")
+                ):
+                    event_snapshots_by_event_id[eid_str] = snap
 
         entries: list[MissionReplayTimelineEntry] = []
         for e_row in event_rows:
             e_read = EventRead.model_validate(e_row)
+            ev_snap = event_snapshots_by_event_id.get(e_read.id)
+            wm_event_snap: dict[str, Any] | None = None
+            if ev_snap is not None:
+                dec_ctx = ev_snap.get("decision_context") or {}
+                summarized = self._summarize_snapshot_state(ev_snap)
+                wm_event_snap = {
+                    "historical_state_available": True,
+                    "is_stub": False,
+                    "snapshot_id": ev_snap.get("snapshot_id"),
+                    "sequence": ev_snap.get("sequence"),
+                    "phase": ev_snap.get("phase"),
+                    "trigger_type": ev_snap.get("trigger_type"),
+                    "trigger_reason": ev_snap.get("trigger_reason"),
+                    "event_category": e_read.category,
+                    "event_type": dec_ctx.get("event_type"),
+                    "severity": dec_ctx.get("event_priority")
+                    or ("CRITICAL" if e_read.category == "SAFETY" else "INFO"),
+                    "trigger_source": dec_ctx.get("event_source")
+                    or e_read.category.lower(),
+                    "source_mode": dec_ctx.get("event_source_mode") or "simulated",
+                    "evidence_ids": list(dec_ctx.get("evidence_ids", [])),
+                    "state_at_event": summarized,
+                    "before_state": summarized,
+                    "after_state": None,
+                }
             entries.append(
                 MissionReplayTimelineEntry(
                     entry_type="event",
                     timestamp=e_read.timestamp,
                     event=e_read,
-                    world_model_snapshot=None,
+                    world_model_snapshot=wm_event_snap,
                 )
             )
 
         for rt_row in trace_rows:
             rt_read = ReasoningTraceRead.model_validate(rt_row)
+            after_snap = snapshots_by_trace_id.get(rt_read.id)
+            if after_snap is not None:
+                paired_before_id = after_snap.get("paired_before_snapshot_id")
+                before_snap = (
+                    snapshots_by_id.get(str(paired_before_id))
+                    if paired_before_id
+                    else None
+                )
+                dec_ctx = after_snap.get("decision_context") or {}
+                if before_snap is None:
+                    orig_eid = dec_ctx.get("event_id") or after_snap.get(
+                        "associated_event_id"
+                    )
+                    if orig_eid:
+                        before_snap = before_snapshots_by_event_id.get(str(orig_eid))
+
+                wm_trace_snap: dict[str, Any] = {
+                    "historical_state_available": True,
+                    "is_stub": False,
+                    "snapshot_id": after_snap.get("snapshot_id"),
+                    "sequence": after_snap.get("sequence"),
+                    "before_snapshot_id": (
+                        before_snap.get("snapshot_id") if before_snap else None
+                    ),
+                    "after_snapshot_id": after_snap.get("snapshot_id"),
+                    "resulting_task_ids": list(rt_read.resulting_task_ids),
+                    "before_state": (
+                        self._summarize_snapshot_state(before_snap)
+                        if before_snap
+                        else None
+                    ),
+                    "trigger": {
+                        "event_id": dec_ctx.get("event_id")
+                        or after_snap.get("associated_event_id"),
+                        "event_type": dec_ctx.get("event_type"),
+                        "severity": dec_ctx.get("triage_severity")
+                        or dec_ctx.get("event_priority")
+                        or "INFO",
+                        "source": dec_ctx.get("event_source") or "mission_lifecycle",
+                        "source_mode": dec_ctx.get("event_source_mode") or "simulated",
+                        "evidence_ids": list(dec_ctx.get("evidence_ids", [])),
+                        "standing_order_id": dec_ctx.get("standing_order_id"),
+                        "triage_disposition": dec_ctx.get("triage_disposition"),
+                        "triage_source": dec_ctx.get("triage_source"),
+                    },
+                    "decision": {
+                        "trace_id": rt_read.id,
+                        "trigger": rt_read.trigger,
+                        "rationale": rt_read.rationale,
+                        "planner_source": dec_ctx.get("planner_source"),
+                        "standing_order_id": dec_ctx.get("standing_order_id"),
+                        "triage_disposition": dec_ctx.get("triage_disposition"),
+                        "validation_passed": bool(
+                            dec_ctx.get("validation_passed", True)
+                        ),
+                        "validation_errors": list(
+                            dec_ctx.get("validation_errors", [])
+                        ),
+                        "plan_accepted": bool(dec_ctx.get("validation_passed", True)),
+                        "resulting_task_ids": list(rt_read.resulting_task_ids),
+                    },
+                    "after_state": self._summarize_snapshot_state(after_snap),
+                }
+            else:
+                wm_trace_snap = {
+                    "historical_state_available": False,
+                    "unavailable_reason": "No persisted World Model snapshot was recorded for this decision entry.",
+                    "is_stub": True,
+                    "resulting_task_ids": list(rt_read.resulting_task_ids),
+                    "before_state": None,
+                    "trigger": None,
+                    "decision": {
+                        "trace_id": rt_read.id,
+                        "trigger": rt_read.trigger,
+                        "rationale": rt_read.rationale,
+                        "validation_passed": True,
+                        "validation_errors": [],
+                        "plan_accepted": True,
+                        "resulting_task_ids": list(rt_read.resulting_task_ids),
+                    },
+                    "after_state": None,
+                }
+
             entries.append(
                 MissionReplayTimelineEntry(
                     entry_type="reasoning_trace",
                     timestamp=rt_read.timestamp,
                     reasoning_trace=rt_read,
-                    world_model_snapshot={
-                        "is_stub": True,
-                        "resulting_task_ids": list(rt_read.resulting_task_ids),
-                    },
+                    world_model_snapshot=wm_trace_snap,
                 )
             )
 
@@ -1010,6 +1196,7 @@ class MissionService:
             key=lambda item: (
                 item.timestamp,
                 0 if item.entry_type == "event" else 1,
+                int((item.world_model_snapshot or {}).get("sequence", 999_999)),
                 item.event.id if item.event is not None else (
                     item.reasoning_trace.id if item.reasoning_trace is not None else ""
                 ),

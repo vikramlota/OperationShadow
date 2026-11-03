@@ -493,10 +493,11 @@ class ReasoningTraceRead(OrmReadBase):
 
 
 class MissionReplayTimelineEntry(SchemaBase):
-    """Single chronological item in GET /mission/{id}/replay (§7, §8.5).
+    """Single chronological item in GET /mission/{id}/replay (§7, §8.5 + Phase 3 Mission Replay).
 
-    Note: PRD v2.0 §5.2 ('World Model snapshot: plan before / plan after') is
-    not yet supplied; `world_model_snapshot` is an optional structured dict stub.
+    `world_model_snapshot` contains structured historical before/trigger/decision/after
+    World Model state when persisted in `mission_snapshots`, or an explicit
+    `historical_state_available: False` / `None` marker when historical state was not recorded.
     """
 
     entry_type: Literal["event", "reasoning_trace"]
