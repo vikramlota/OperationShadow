@@ -1,18 +1,20 @@
-"""Mission REST endpoints (§3, §7: POST /mission, GET /mission/{id}, GET /mission/{id}/replay, POST /mission/{id}/execute, and ULTRON environmental intelligence)."""
+"""Mission REST endpoints (§3, §7: POST /mission, GET /mission/{id}, GET /mission/{id}/replay, GET /mission/{id}/report, POST /mission/{id}/execute, and ULTRON environmental intelligence)."""
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from core.config import settings
 from db.session import AsyncSessionLocal, get_db_session
-from fastapi import APIRouter, BackgroundTasks, Depends, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
+from fastapi.responses import PlainTextResponse, Response
 from pydantic import BaseModel, Field
 from schemas.entities import (
     MissionCreateRequest,
     MissionCreateResponse,
     MissionDetailRead,
     MissionReplayResponse,
+    MissionReportResponse,
 )
 from services.mission_service import MissionService, mission_service
 from services.tts import speak_rationale
@@ -146,6 +148,23 @@ async def get_mission_replay_endpoint(
 ) -> MissionReplayResponse:
     """Return chronological timeline of events and reasoning-trace entries (§7, §8.5)."""
     return await service.get_mission_replay(session, mission_id)
+
+
+@router.get("/{mission_id}/report", response_model=MissionReportResponse)
+async def get_mission_report_endpoint(
+    mission_id: str,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    service: Annotated[MissionService, Depends(get_mission_service)],
+    format: Annotated[Literal["json", "markdown"], Query()] = "json",
+) -> Response | MissionReportResponse:
+    """Generate and return a deterministic After-Action Mission Report from persisted records (Phase 3)."""
+    report = await service.generate_mission_report(session, mission_id)
+    if format == "markdown":
+        return PlainTextResponse(
+            content=report.markdown_export,
+            media_type="text/markdown; charset=utf-8",
+        )
+    return report
 
 
 @router.post("/{mission_id}/complete", response_model=MissionDetailRead)

@@ -1,10 +1,10 @@
-"""Mission lifecycle, physical SCOUT01 serial execution, dead-reckoning map tracking, and replay service (§3, §4, §7 + Phase 3 Mission Memory & Replay).
+"""Mission lifecycle, physical SCOUT01 serial execution, dead-reckoning map tracking, replay, and deterministic after-action report service (§3, §4, §7 + Phase 3).
 
 Uses `UltronAgentPort` (`UltronLangGraphAgent` / `StubUltronAgent`) for mission creation
 and task decomposition, persists `Mission`, `Task`, `Event`, `ReasoningTrace`, and
 immutable `MissionSnapshot` records to SQLite, broadcasts live updates over
-`DashboardGateway`, and executes assigned tasks over USB serial (`ScoutSerialWriter`
-on `/dev/ttyACM1`) while updating SCOUT01's position on the SVG Tactical Floor Map.
+`DashboardGateway`, reconstructs before/after replay timelines, and generates
+evidence-backed After-Action Mission Reports without invoking an LLM.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ if _project_root not in sys.path:
 from core.config import settings
 from core.errors import ResourceNotFoundError
 from core.logging import get_logger
-from db.models import Event, Mission, ReasoningTrace, Task, Vehicle
+from db.models import Event, Mission, Observation, ReasoningTrace, Task, Vehicle
 from schemas.entities import (
     EventRead,
     MissionCreateRequest,
@@ -31,8 +31,29 @@ from schemas.entities import (
     MissionDetailRead,
     MissionReplayResponse,
     MissionReplayTimelineEntry,
+    MissionReportBatteryRecord,
+    MissionReportDecisionHistory,
+    MissionReportDecisionRecord,
+    MissionReportEnvironmentalFindings,
+    MissionReportEscalationRecord,
+    MissionReportEventRecord,
+    MissionReportHazardFinding,
+    MissionReportObjectFinding,
+    MissionReportObservationFinding,
+    MissionReportOverview,
+    MissionReportResponse,
+    MissionReportSafetyEvent,
+    MissionReportSafetySummary,
+    MissionReportStandingOrderRecord,
+    MissionReportTaskRecord,
+    MissionReportTaskSummary,
+    MissionReportTriageRecord,
+    MissionReportUnresolvedItems,
+    MissionReportVehicleSummary,
     ReasoningTraceRead,
+    TaskEvidenceStageLiteral,
     TaskRead,
+    ensure_utc_datetime,
 )
 from schemas.enums import EventCategoryEnum, MissionStatusEnum
 from services.event_service import EventService, event_service
@@ -1203,6 +1224,1024 @@ class MissionService:
             )
         )
         return MissionReplayResponse(mission_id=mission_id, entries=entries)
+
+    async def generate_mission_report(
+        self,
+        session: AsyncSession,
+        mission_id: str,
+    ) -> MissionReportResponse:
+        """Deterministically generate a structured After-Action Mission Report from persisted records (Phase 3).
+
+        Never invokes an LLM, never mutates mission state, never infers physical
+        execution from a plan or simulated completion, and never projects
+        camera-relative coordinates onto the global map.
+        """
+        stmt = (
+            select(Mission)
+            .where(Mission.id == mission_id)
+            .options(
+                selectinload(Mission.tasks),
+                selectinload(Mission.observations),
+                selectinload(Mission.events),
+                selectinload(Mission.reasoning_traces),
+            )
+        )
+        mission_row = (await session.execute(stmt)).scalar_one_or_none()
+        if mission_row is None:
+            raise ResourceNotFoundError("Mission", mission_id)
+
+        # Flush any buffered in-memory routed events, traces, tasks, or snapshots for this mission
+        if hasattr(self._agent, "sync_event_intelligence_to_event_service"):
+            try:
+                await self._agent.sync_event_intelligence_to_event_service(
+                    session,
+                    self._events,
+                    mission_id=mission_id,
+                    broadcast=False,
+                )
+            except Exception as exc:
+                logger.error(
+                    f"Failed to sync buffered event intelligence before report for {mission_id}: {exc}"
+                )
+        await self._persist_unsynced_agent_snapshots(session, mission_id, commit=True)
+
+        # Reload persisted collections in deterministic order
+        task_rows = (
+            await session.execute(
+                select(Task)
+                .where(Task.mission_id == mission_id)
+                .order_by(Task.priority.asc(), Task.id.asc())
+            )
+        ).scalars().all()
+        obs_rows = (
+            await session.execute(
+                select(Observation)
+                .where(Observation.mission_id == mission_id)
+                .order_by(Observation.timestamp.asc(), Observation.id.asc())
+                .limit(250)
+            )
+        ).scalars().all()
+        event_rows = (
+            await session.execute(
+                select(Event)
+                .where(Event.mission_id == mission_id)
+                .order_by(Event.timestamp.asc(), Event.id.asc())
+                .limit(250)
+            )
+        ).scalars().all()
+        trace_rows = (
+            await session.execute(
+                select(ReasoningTrace)
+                .where(ReasoningTrace.mission_id == mission_id)
+                .order_by(ReasoningTrace.timestamp.asc(), ReasoningTrace.id.asc())
+                .limit(250)
+            )
+        ).scalars().all()
+        persisted_snapshots: list[dict[str, Any]] = []
+        if hasattr(self._events, "list_mission_snapshots"):
+            persisted_snapshots = await self._events.list_mission_snapshots(
+                session, mission_id, limit=250
+            )
+
+        v_row = await session.get(Vehicle, "SCOUT01")
+        vehicle_mode = (v_row.mode if v_row is not None else settings.default_vehicle_mode) or "simulated"
+        hw_lockout = bool(settings.hardware_lockout)
+
+        sim_completion_used = any(
+            "SIMULATED_MISSION_COMPLETION" in rt.trigger
+            or "SIMULATED_ULTRON_STUB" in rt.rationale
+            for rt in trace_rows
+        )
+        is_simulated_exec = bool(
+            hw_lockout or vehicle_mode == "simulated" or sim_completion_used
+        )
+
+        created_at = ensure_utc_datetime(mission_row.created_at) or datetime.now(timezone.utc)
+        completed_at = ensure_utc_datetime(mission_row.completed_at)
+        duration_sec: float | None = None
+        if completed_at is not None and completed_at >= created_at:
+            duration_sec = round((completed_at - created_at).total_seconds(), 3)
+
+        # Check if any snapshot recorded DEGRADED mode
+        degraded_observed = any(
+            str(s.get("mission_status", "")).upper() == "DEGRADED"
+            or str(s.get("trigger_type", "")).upper() == "REPLAN_DEGRADED"
+            for s in persisted_snapshots
+        ) or any(rt.id.startswith("DT-DEG-") for rt in trace_rows)
+
+        final_status_str = (
+            "DEGRADED"
+            if degraded_observed and mission_row.status in ("ACTIVE", "IN_PROGRESS")
+            else mission_row.status
+        )
+
+        exec_provenance = (
+            "SIMULATED_ONLY — Simulated vehicle mode or hardware lockout active; no physical rover actuation occurred."
+            if is_simulated_exec
+            else "SUPERVISED_REAL_MODE — Physical serial dispatch enabled; closed-loop physical completion remains unconfirmed."
+        )
+
+        overview = MissionReportOverview(
+            mission_id=mission_id,
+            objective=mission_row.objective,
+            created_at=created_at,
+            completed_at=completed_at,
+            duration_seconds=duration_sec,
+            final_status=final_status_str,
+            vehicle_mode=vehicle_mode,
+            is_simulated_execution=is_simulated_exec,
+            hardware_lockout_active=hw_lockout,
+            execution_provenance=exec_provenance,
+        )
+
+        # 2. Task Summary
+        traces_by_task_id: dict[str, list[str]] = {}
+        for rt in trace_rows:
+            for tid in rt.resulting_task_ids:
+                traces_by_task_id.setdefault(tid, []).append(rt.id)
+
+        serial_step_events_by_task: set[str] = set()
+        for ev in event_rows:
+            if ev.category == "TELEMETRY" and "-> '" in ev.message:
+                for t in task_rows:
+                    if f" {t.id}:" in ev.message:
+                        serial_step_events_by_task.add(t.id)
+
+        task_records: list[MissionReportTaskRecord] = []
+        for t in task_rows:
+            t_status = t.status.upper()
+            stage: TaskEvidenceStageLiteral
+            if t_status == "COMPLETED":
+                if is_simulated_exec:
+                    stage = "SIMULATED_COMPLETED"
+                    p_note = (
+                        "Task marked COMPLETED in simulation (complete_mission helper or mock adapter); "
+                        "no physical rover execution occurred."
+                    )
+                elif t.id in serial_step_events_by_task:
+                    stage = "COMMAND_DISPATCHED"
+                    p_note = (
+                        "Serial step commands dispatched; physical waypoint arrival not verified by closed-loop localization."
+                    )
+                else:
+                    stage = "ASSIGNED"
+                    p_note = "Task marked COMPLETED without recorded physical command dispatch evidence."
+            elif t_status == "IN_PROGRESS":
+                stage = "IN_PROGRESS"
+                p_note = "Task was in progress but did not reach completion."
+            elif t_status == "CANCELLED":
+                stage = "CANCELLED"
+                p_note = "Task was cancelled prior to completion (e.g., safety stop, E-Stop, or replanning)."
+            elif t_status == "FAILED":
+                stage = "FAILED"
+                p_note = "Task failed during execution."
+            elif t_status == "ASSIGNED":
+                stage = "ASSIGNED"
+                p_note = "Task was planned and assigned to SCOUT01; never physically or simulatedly executed."
+            else:
+                stage = "PLANNED"
+                p_note = "Task was planned only and remained pending."
+
+            task_records.append(
+                MissionReportTaskRecord(
+                    task_id=t.id,
+                    vehicle_id=t.vehicle_id or "SCOUT01",
+                    task_type=t.type,
+                    area=t.area,
+                    target=t.target,
+                    priority=t.priority,
+                    status=t_status,
+                    highest_evidence_stage=stage,
+                    is_simulated=is_simulated_exec,
+                    source_trace_ids=traces_by_task_id.get(t.id, []),
+                    provenance_note=p_note,
+                )
+            )
+
+        completed_cnt = sum(1 for tr in task_records if tr.status == "COMPLETED")
+        failed_cnt = sum(1 for tr in task_records if tr.status == "FAILED")
+        cancelled_cnt = sum(1 for tr in task_records if tr.status == "CANCELLED")
+        assigned_cnt = sum(1 for tr in task_records if tr.status == "ASSIGNED")
+        in_prog_cnt = sum(1 for tr in task_records if tr.status == "IN_PROGRESS")
+        pending_only_cnt = sum(1 for tr in task_records if tr.status == "PENDING")
+        pending_total_cnt = pending_only_cnt + assigned_cnt + in_prog_cnt
+
+        task_summary = MissionReportTaskSummary(
+            total_tasks=len(task_records),
+            completed_tasks=completed_cnt,
+            pending_tasks=pending_total_cnt,
+            assigned_tasks=assigned_cnt,
+            in_progress_tasks=in_prog_cnt,
+            failed_tasks=failed_cnt,
+            cancelled_tasks=cancelled_cnt,
+            tasks=task_records,
+        )
+
+        # 3. Environmental Findings (from persisted snapshots + SQLite observations)
+        objective_lower = mission_row.objective.lower()
+        task_targets_lower = {
+            (t.target or "").lower() for t in task_rows if t.target
+        }
+
+        tracked_by_id: dict[str, dict[str, Any]] = {}
+        hazards_by_id: dict[str, dict[str, Any]] = {}
+        obs_by_id: dict[str, MissionReportObservationFinding] = {}
+        evidence_ref_set: set[str] = set()
+        unconfirmed_frames: set[str] = set()
+        transform_map_validated = False
+        extrinsics_validated = False
+
+        for snap in persisted_snapshots:
+            prov = snap.get("evidence_provenance") or {}
+            if prov.get("transform_map_validated"):
+                transform_map_validated = True
+            if prov.get("extrinsics_camera_lidar_validated"):
+                extrinsics_validated = True
+            for uf in prov.get("unconfirmed_coordinate_frames", []):
+                unconfirmed_frames.add(str(uf))
+
+            for tobj in snap.get("tracked_objects", []):
+                if isinstance(tobj, dict) and tobj.get("object_id"):
+                    tracked_by_id[str(tobj["object_id"])] = tobj
+            for haz in snap.get("hazards", []):
+                if isinstance(haz, dict) and haz.get("id"):
+                    hazards_by_id[str(haz["id"])] = haz
+            for oref in snap.get("observation_refs", []):
+                if isinstance(oref, dict) and oref.get("observation_id"):
+                    oid = str(oref["observation_id"])
+                    evidence_ref_set.add(oid)
+                    frame_str = str(oref.get("coordinate_frame", "oak_rgb_camera_optical_frame"))
+                    if frame_str != "map" or not transform_map_validated:
+                        unconfirmed_frames.add(frame_str)
+                    ts_val = float(oref.get("sensor_timestamp", snap.get("timestamp", 0.0)))
+                    obs_by_id[oid] = MissionReportObservationFinding(
+                        observation_id=oid,
+                        vehicle_id=str(oref.get("vehicle_id") or "SCOUT01"),
+                        sensor_type=str(oref.get("sensor_type", "depth_camera")),
+                        obs_type=str(oref.get("classification") or "detection"),
+                        confidence=float(oref.get("confidence") or 0.85),
+                        coordinate_frame=frame_str,
+                        position_x=float(oref.get("position_x", 0.0)),
+                        position_y=float(oref.get("position_y", 0.0)),
+                        position_z=float(oref.get("position_z", 0.0)),
+                        range_m=(
+                            float(oref["range_m"])
+                            if oref.get("range_m") is not None
+                            else None
+                        ),
+                        timestamp=datetime.fromtimestamp(ts_val, tz=timezone.utc).isoformat(),
+                        source_mode=str(oref.get("source_mode", "simulated")),
+                        epistemic_status=str(oref.get("epistemic_status", "OBSERVED")),
+                        is_stale=bool(oref.get("is_stale", False)),
+                    )
+
+        # Merge SQLite `Observation` rows
+        for o_row in obs_rows:
+            evidence_ref_set.add(o_row.id)
+            raw_dict = o_row.raw if isinstance(o_row.raw, dict) else {}
+            frame_str = str(raw_dict.get("frame", "map"))
+            is_conf_map = bool(raw_dict.get("coordinates_are_map_frame", frame_str == "map" and transform_map_validated))
+            if not is_conf_map:
+                unconfirmed_frames.add(frame_str)
+            pos_dict = raw_dict.get("position") if isinstance(raw_dict.get("position"), dict) else {}
+            px = float(pos_dict.get("x", o_row.location_x))
+            py = float(pos_dict.get("y", o_row.location_y))
+            pz = float(pos_dict.get("z", 0.0))
+            rng = float(raw_dict["range_m"]) if raw_dict.get("range_m") is not None else None
+            src_mode = "physical" if raw_dict.get("source") == "rosbridge" else "simulated"
+            obs_ts = ensure_utc_datetime(o_row.timestamp) or created_at
+
+            if o_row.id not in obs_by_id:
+                obs_by_id[o_row.id] = MissionReportObservationFinding(
+                    observation_id=o_row.id,
+                    vehicle_id=o_row.vehicle_id,
+                    sensor_type=str(raw_dict.get("sensor", "depth_camera")),
+                    obs_type=o_row.obs_type,
+                    confidence=float(o_row.confidence),
+                    coordinate_frame=frame_str,
+                    position_x=px,
+                    position_y=py,
+                    position_z=pz,
+                    range_m=rng,
+                    timestamp=obs_ts.isoformat(),
+                    source_mode=src_mode,
+                    epistemic_status="OBSERVED",
+                    is_stale=False,
+                )
+
+            # Ensure SQLite observations are also reflected in objects/hazards if not already tracked
+            label_clean = o_row.obs_type.replace("detection:", "").strip()
+            is_haz = any(
+                kw in label_clean.lower()
+                for kw in ("hazard", "fire", "smoke", "thermal", "gas")
+            )
+            is_obs = any(
+                kw in label_clean.lower()
+                for kw in ("obstacle", "chair", "bench", "box", "wall", "barrier", "table")
+            )
+            if is_haz and not any(
+                h.get("observation_id") == o_row.id for h in hazards_by_id.values()
+            ):
+                hid = f"HAZ-{o_row.id}"
+                hazards_by_id[hid] = {
+                    "id": hid,
+                    "type": label_clean,
+                    "coordinate_frame": frame_str,
+                    "location": {"x": px, "y": py},
+                    "confidence": float(o_row.confidence),
+                    "epistemic_status": "OBSERVED",
+                    "source_mode": src_mode,
+                    "source_vehicle": o_row.vehicle_id,
+                    "observation_id": o_row.id,
+                    "handled": False,
+                }
+            elif not any(
+                o_row.id in (t.get("contributing_observation_ids") or [])
+                for t in tracked_by_id.values()
+            ):
+                oid_synth = f"OBJ-{o_row.id}"
+                tracked_by_id[oid_synth] = {
+                    "object_id": oid_synth,
+                    "label": label_clean,
+                    "coordinate_frame": frame_str,
+                    "position": {"x": px, "y": py, "z": pz, "range_m": rng},
+                    "classification_confidence": float(o_row.confidence),
+                    "epistemic_status": "OBSERVED",
+                    "tracking_status": "ACTIVE",
+                    "source_mode": src_mode,
+                    "is_obstacle": is_obs,
+                    "is_hazard": is_haz,
+                    "contributing_observation_ids": [o_row.id],
+                }
+
+        detected_objects: list[MissionReportObjectFinding] = []
+        identified_targets: list[MissionReportObjectFinding] = []
+        obstacles_list: list[MissionReportObjectFinding] = []
+
+        for oid, tobj in sorted(tracked_by_id.items()):
+            evidence_ref_set.add(oid)
+            lbl = str(tobj.get("label", "unknown"))
+            frame_str = str(tobj.get("coordinate_frame", "oak_rgb_camera_optical_frame"))
+            pos = tobj.get("position") or {}
+            px = float(pos.get("x", 0.0))
+            py = float(pos.get("y", 0.0))
+            pz = float(pos.get("z", 0.0))
+            rng = float(pos["range_m"]) if pos.get("range_m") is not None else None
+            is_conf_map = frame_str == "map" and transform_map_validated
+            map_x = px if is_conf_map else None
+            map_y = py if is_conf_map else None
+            frame_note = (
+                "Confirmed global map frame."
+                if is_conf_map
+                else f"Camera/sensor-relative frame '{frame_str}'; global floor-map coordinates are NOT confirmed and were not projected."
+            )
+            contrib_ids = [str(x) for x in (tobj.get("contributing_observation_ids") or [])]
+            for cid in contrib_ids:
+                evidence_ref_set.add(cid)
+
+            is_obs = bool(tobj.get("is_obstacle", False))
+            is_haz = bool(tobj.get("is_hazard", False))
+            matches_target = bool(
+                lbl.lower() in objective_lower
+                or lbl.lower() in task_targets_lower
+                or any(lbl.lower() in tgt for tgt in task_targets_lower)
+                or (not is_obs and not is_haz and lbl.lower() not in ("unknown", "obstacle"))
+            )
+
+            finding = MissionReportObjectFinding(
+                object_id=oid,
+                label=lbl,
+                coordinate_frame=frame_str,
+                position_x=px,
+                position_y=py,
+                position_z=pz,
+                range_m=rng,
+                map_position_x=map_x,
+                map_position_y=map_y,
+                confidence=float(tobj.get("classification_confidence", 0.85)),
+                epistemic_status=str(tobj.get("epistemic_status", "OBSERVED")),
+                tracking_status=str(tobj.get("tracking_status", "ACTIVE")),
+                source_mode=str(tobj.get("source_mode", "simulated")),
+                is_obstacle=is_obs,
+                is_hazard=is_haz,
+                matches_objective_target=matches_target,
+                evidence_ids=contrib_ids,
+                coordinate_frame_note=frame_note,
+            )
+            detected_objects.append(finding)
+            if is_obs:
+                obstacles_list.append(finding)
+            if matches_target and not is_obs:
+                identified_targets.append(finding)
+
+        reported_hazards: list[MissionReportHazardFinding] = []
+        for hid, hdict in sorted(hazards_by_id.items()):
+            evidence_ref_set.add(hid)
+            frame_str = str(hdict.get("coordinate_frame", "map"))
+            loc = hdict.get("location") or {}
+            hx = float(loc.get("x", 0.0))
+            hy = float(loc.get("y", 0.0))
+            obs_id = hdict.get("observation_id")
+            ev_ids = [str(obs_id)] if obs_id else []
+            for eid in ev_ids:
+                evidence_ref_set.add(eid)
+            is_conf_map = frame_str == "map" and transform_map_validated
+            frame_note = (
+                "Confirmed global map frame."
+                if is_conf_map
+                else f"Coordinate recorded in '{frame_str}' (global map transform unconfirmed)."
+            )
+            reported_hazards.append(
+                MissionReportHazardFinding(
+                    hazard_id=hid,
+                    hazard_type=str(hdict.get("type", "possible_hazard")),
+                    coordinate_frame=frame_str,
+                    position_x=hx,
+                    position_y=hy,
+                    confidence=float(hdict.get("confidence", 0.9)),
+                    epistemic_status=str(hdict.get("epistemic_status", "OBSERVED")),
+                    source_mode=str(hdict.get("source_mode", "simulated")),
+                    source_vehicle=str(hdict.get("source_vehicle", "SCOUT01")),
+                    evidence_ids=ev_ids,
+                    handled=bool(hdict.get("handled", False)),
+                    coordinate_frame_note=frame_note,
+                )
+            )
+
+        frame_limitations: list[str] = []
+        if not transform_map_validated:
+            frame_limitations.append(
+                "Global map transform (map -> odom -> oak_parent_frame -> oak_rgb_camera_optical_frame) is unconfirmed; camera detections remain strictly camera-relative."
+            )
+        if not extrinsics_validated:
+            frame_limitations.append(
+                "Camera-to-LiDAR extrinsics are unconfirmed; cross-sensor spatial corroboration is gated."
+            )
+        for uf in sorted(unconfirmed_frames):
+            frame_limitations.append(
+                f"Coordinate frame '{uf}' is unconfirmed for global floor-map projection."
+            )
+
+        sensor_obs_list = sorted(
+            obs_by_id.values(), key=lambda item: (item.timestamp, item.observation_id)
+        )
+        coverage_note = (
+            "No sensor observations were recorded during this mission. Absence of observations does NOT prove that objects or hazards were absent."
+            if not sensor_obs_list and not detected_objects and not reported_hazards
+            else "Observations reflect point-in-time single-sensor detections. 360° LiDAR geometric coverage is unavailable; uninspected areas are NOT verified clear."
+        )
+
+        environmental_findings = MissionReportEnvironmentalFindings(
+            detected_objects=detected_objects,
+            identified_targets=identified_targets,
+            reported_hazards=reported_hazards,
+            obstacles=obstacles_list,
+            sensor_observations=sensor_obs_list,
+            evidence_references=sorted(evidence_ref_set),
+            coordinate_frame_limitations=frame_limitations,
+            coverage_note=coverage_note,
+        )
+
+        # 4. ULTRON Decision History
+        snap_by_event_id: dict[str, dict[str, Any]] = {}
+        snap_by_trace_id: dict[str, dict[str, Any]] = {}
+        for snap in persisted_snapshots:
+            aeid = snap.get("associated_event_id")
+            if aeid and (aeid not in snap_by_event_id or snap.get("phase") == "BEFORE"):
+                snap_by_event_id[str(aeid)] = snap
+            atid = snap.get("associated_trace_id")
+            if atid and (atid not in snap_by_trace_id or snap.get("phase") == "AFTER"):
+                snap_by_trace_id[str(atid)] = snap
+
+        important_events: list[MissionReportEventRecord] = []
+        for ev in event_rows:
+            ev_ts = ensure_utc_datetime(ev.timestamp) or created_at
+            ev_snap = snap_by_event_id.get(ev.id)
+            dec_ctx = (ev_snap.get("decision_context") or {}) if ev_snap else {}
+            ev_type = dec_ctx.get("event_type")
+            if not ev_type and ev.message.startswith("[") and "]" in ev.message:
+                ev_type = ev.message[1 : ev.message.index("]")]
+            sev = (
+                str(dec_ctx.get("event_priority"))
+                if dec_ctx.get("event_priority")
+                else ("CRITICAL" if ev.category == "SAFETY" else "INFO")
+            )
+            important_events.append(
+                MissionReportEventRecord(
+                    event_id=ev.id,
+                    timestamp=ev_ts,
+                    category=ev.category,
+                    event_type=ev_type,
+                    severity=sev,
+                    source=str(dec_ctx.get("event_source") or ev.category.lower()),
+                    source_mode=str(dec_ctx.get("event_source_mode") or "simulated"),
+                    message=ev.message,
+                    evidence_ids=[str(x) for x in dec_ctx.get("evidence_ids", [])],
+                )
+            )
+
+        standing_orders_applied: list[MissionReportStandingOrderRecord] = []
+        llm_triage_outcomes: list[MissionReportTriageRecord] = []
+        replanning_operations: list[MissionReportDecisionRecord] = []
+        rejected_decisions: list[MissionReportDecisionRecord] = []
+        accepted_plans: list[MissionReportDecisionRecord] = []
+        human_escalations: list[MissionReportEscalationRecord] = []
+
+        for rt in trace_rows:
+            rt_ts = ensure_utc_datetime(rt.timestamp) or created_at
+            rt_snap = snap_by_trace_id.get(rt.id)
+            dec_ctx = (rt_snap.get("decision_context") or {}) if rt_snap else {}
+            src_ev_id = dec_ctx.get("event_id") or (
+                rt_snap.get("associated_event_id") if rt_snap else None
+            )
+            so_id = dec_ctx.get("standing_order_id")
+            if not so_id and rt.trigger.startswith("[STANDING_ORDER:") and "]" in rt.trigger:
+                so_id = rt.trigger.split(":", 1)[1].split("]", 1)[0].strip()
+
+            triage_disp = dec_ctx.get("triage_disposition")
+            val_passed = bool(dec_ctx.get("validation_passed", not rt.id.startswith("DT-DEG-")))
+            val_errors = [str(x) for x in dec_ctx.get("validation_errors", [])]
+            ev_ids = [str(x) for x in dec_ctx.get("evidence_ids", [])]
+            before_sid = rt_snap.get("paired_before_snapshot_id") if rt_snap else None
+            after_sid = rt_snap.get("snapshot_id") if rt_snap else None
+
+            if rt.trigger.startswith("EVENT_TRIAGE:"):
+                parts = rt.trigger.split(":")
+                ev_type_parsed = parts[1] if len(parts) > 1 else dec_ctx.get("event_type")
+                ev_id_parsed = parts[2] if len(parts) > 2 else src_ev_id
+                disp_str = str(triage_disp or "LOG_ONLY")
+                llm_triage_outcomes.append(
+                    MissionReportTriageRecord(
+                        trace_id=rt.id,
+                        event_id=ev_id_parsed,
+                        event_type=ev_type_parsed,
+                        disposition=disp_str,
+                        severity=str(dec_ctx.get("triage_severity") or "MEDIUM"),
+                        triage_source=str(dec_ctx.get("triage_source") or "fallback"),
+                        rationale=rt.rationale,
+                        evidence_ids=ev_ids,
+                        timestamp=rt_ts.isoformat(),
+                    )
+                )
+                if disp_str == "ESCALATE_TO_OPERATOR":
+                    human_escalations.append(
+                        MissionReportEscalationRecord(
+                            record_id=rt.id,
+                            timestamp=rt_ts.isoformat(),
+                            reason=f"Triage escalated event {ev_id_parsed} to operator: {rt.rationale}",
+                            source_event_id=ev_id_parsed,
+                        )
+                    )
+                continue
+
+            dec_record = MissionReportDecisionRecord(
+                trace_id=rt.id,
+                timestamp=rt_ts,
+                trigger=rt.trigger,
+                rationale=rt.rationale,
+                source_event_id=str(src_ev_id) if src_ev_id else None,
+                standing_order_id=str(so_id) if so_id else None,
+                triage_disposition=str(triage_disp) if triage_disp else None,
+                planner_source=dec_ctx.get("planner_source"),
+                validation_passed=val_passed,
+                validation_errors=val_errors,
+                resulting_task_ids=list(rt.resulting_task_ids),
+                evidence_ids=ev_ids,
+                before_snapshot_id=str(before_sid) if before_sid else None,
+                after_snapshot_id=str(after_sid) if after_sid else None,
+            )
+
+            if so_id:
+                standing_orders_applied.append(
+                    MissionReportStandingOrderRecord(
+                        standing_order_id=str(so_id),
+                        source_event_id=str(src_ev_id) if src_ev_id else None,
+                        trace_id=rt.id,
+                        timestamp=rt_ts.isoformat(),
+                        rationale=rt.rationale,
+                        resulting_task_ids=list(rt.resulting_task_ids),
+                        evidence_ids=ev_ids,
+                    )
+                )
+                if so_id in ("SO-01-CRITICAL-BATTERY", "SO-04-HAZARD-HOLD"):
+                    human_escalations.append(
+                        MissionReportEscalationRecord(
+                            record_id=rt.id,
+                            timestamp=rt_ts.isoformat(),
+                            reason=f"Standing Order {so_id} requires operator intervention: {rt.rationale}",
+                            source_event_id=str(src_ev_id) if src_ev_id else None,
+                            standing_order_id=str(so_id),
+                        )
+                    )
+
+            if not val_passed or rt.id.startswith("DT-DEG-"):
+                rejected_decisions.append(dec_record)
+                human_escalations.append(
+                    MissionReportEscalationRecord(
+                        record_id=rt.id,
+                        timestamp=rt_ts.isoformat(),
+                        reason=f"Safety validator rejected proposed plan ({rt.trigger}); entered DEGRADED hold.",
+                        source_event_id=str(src_ev_id) if src_ev_id else None,
+                    )
+                )
+            else:
+                if not rt.trigger.startswith("SIMULATED_MISSION_COMPLETION"):
+                    accepted_plans.append(dec_record)
+                if rt.trigger not in (
+                    "OPERATOR_MISSION_DISPATCH",
+                    "INITIAL_MISSION_PLANNING",
+                ) and not rt.trigger.startswith("SIMULATED_MISSION_COMPLETION"):
+                    replanning_operations.append(dec_record)
+
+        decision_history = MissionReportDecisionHistory(
+            important_events=important_events,
+            standing_orders_applied=standing_orders_applied,
+            llm_triage_outcomes=llm_triage_outcomes,
+            replanning_operations=replanning_operations,
+            rejected_decisions=rejected_decisions,
+            accepted_plans=accepted_plans,
+            human_escalation_events=human_escalations,
+        )
+
+        # 5. Vehicle Summary
+        conn_history: list[str] = []
+        battery_samples: list[float] = []
+        comm_failures: list[str] = []
+
+        for snap in persisted_snapshots:
+            v_snap = (snap.get("vehicles") or {}).get("SCOUT01")
+            if isinstance(v_snap, dict):
+                c_val = str(v_snap.get("connection", "ONLINE"))
+                if not conn_history or conn_history[-1] != c_val:
+                    conn_history.append(c_val)
+                if c_val in ("OFFLINE", "DISCONNECTED", "UNKNOWN"):
+                    comm_failures.append(
+                        f"[{snap.get('timestamp_iso')}] SCOUT01 connection state was {c_val} ({snap.get('trigger_reason')})."
+                    )
+                bat_val = v_snap.get("battery")
+                if isinstance(bat_val, (int, float)) and math.isfinite(float(bat_val)):
+                    battery_samples.append(float(bat_val))
+
+        if v_row is not None:
+            if not conn_history or conn_history[-1] != v_row.connection:
+                conn_history.append(v_row.connection)
+            if math.isfinite(float(v_row.battery)):
+                battery_samples.append(float(v_row.battery))
+
+        for ev in event_rows:
+            if "VEHICLE_DISCONNECTED" in ev.message or "CRITICAL STOP FAULT" in ev.message:
+                comm_failures.append(
+                    f"[{ensure_utc_datetime(ev.timestamp).isoformat() if ev.timestamp else ''}] {ev.message}"
+                )
+
+        if not battery_samples:
+            battery_samples = [100.0]
+
+        min_bat = round(min(battery_samples), 2)
+        max_bat = round(max(battery_samples), 2)
+        final_bat = round(battery_samples[-1], 2)
+
+        vehicle_summary = MissionReportVehicleSummary(
+            vehicle_id="SCOUT01",
+            vehicle_type="ground",
+            mode=vehicle_mode,
+            final_status=(v_row.status if v_row is not None else "IDLE"),
+            final_connection=(v_row.connection if v_row is not None else "DISCONNECTED"),
+            connection_history=conn_history or ["DISCONNECTED"],
+            battery_observations=MissionReportBatteryRecord(
+                min_battery=min_bat,
+                max_battery=max_bat,
+                final_battery=final_bat,
+                sample_count=len(battery_samples),
+                critical_low_battery_observed=(min_bat < 20.0),
+            ),
+            task_participation_ids=[
+                t.task_id for t in task_records if t.vehicle_id == "SCOUT01"
+            ],
+            communication_failures=comm_failures,
+            operational_limitations=[
+                "HAWK01 aerial vehicle is simulated / roadmap only and is not integrated.",
+                (
+                    "SHADOW_HARDWARE_LOCKOUT=true: physical actuator commands are locked out."
+                    if hw_lockout
+                    else "Hardware lockout is disabled; supervised serial safety rules apply."
+                ),
+                "Onboard thermal and gas telemetry sensors are unimplemented on SCOUT01.",
+                "360° LiDAR free-space scan and camera-to-LiDAR extrinsics are unconfirmed.",
+            ],
+        )
+
+        # 6. Safety Summary
+        estop_events: list[MissionReportSafetyEvent] = []
+        val_failure_events: list[MissionReportSafetyEvent] = []
+        crit_fault_events: list[MissionReportSafetyEvent] = []
+        unresolved_safety: list[str] = []
+
+        for snap in persisted_snapshots:
+            if snap.get("trigger_type") == "EMERGENCY_STOP_TRIGGERED":
+                estop_events.append(
+                    MissionReportSafetyEvent(
+                        record_id=str(snap.get("snapshot_id")),
+                        timestamp=str(snap.get("timestamp_iso")),
+                        category="EMERGENCY_STOP",
+                        description=str(snap.get("trigger_reason")),
+                        stop_dispatched=True,
+                        vehicle_acknowledged=is_simulated_exec,
+                        physical_stop_confirmed=False,
+                        is_simulated=is_simulated_exec,
+                    )
+                )
+
+        for ev in event_rows:
+            ev_iso = (ensure_utc_datetime(ev.timestamp) or created_at).isoformat()
+            msg_upper = ev.message.upper()
+            if "CRITICAL STOP FAULT" in msg_upper or "[VEHICLE_FAULT]" in msg_upper:
+                crit_fault_events.append(
+                    MissionReportSafetyEvent(
+                        record_id=ev.id,
+                        timestamp=ev_iso,
+                        category="CRITICAL_FAULT",
+                        description=ev.message,
+                        stop_dispatched=False,
+                        vehicle_acknowledged=False,
+                        physical_stop_confirmed=False,
+                        is_simulated=is_simulated_exec,
+                    )
+                )
+            elif "EMERGENCY STOP" in msg_upper or "E-STOP" in msg_upper or "EMERGENCY_STOPPED" in msg_upper:
+                estop_events.append(
+                    MissionReportSafetyEvent(
+                        record_id=ev.id,
+                        timestamp=ev_iso,
+                        category="EMERGENCY_STOP",
+                        description=ev.message,
+                        stop_dispatched="FAILED" not in msg_upper,
+                        vehicle_acknowledged=("CONFIRMED" in msg_upper and "NONE_CONFIRMED" not in msg_upper),
+                        physical_stop_confirmed=False,
+                        is_simulated=is_simulated_exec,
+                    )
+                )
+            elif ev.category == "SAFETY" and "SAFETY CHECK" in msg_upper:
+                val_failure_events.append(
+                    MissionReportSafetyEvent(
+                        record_id=ev.id,
+                        timestamp=ev_iso,
+                        category="VALIDATION_FAILURE",
+                        description=ev.message,
+                        is_simulated=is_simulated_exec,
+                    )
+                )
+
+        for rej in rejected_decisions:
+            val_failure_events.append(
+                MissionReportSafetyEvent(
+                    record_id=rej.trace_id,
+                    timestamp=rej.timestamp.isoformat(),
+                    category="VALIDATION_FAILURE",
+                    description=f"Safety validator rejected plan ({rej.trigger}): {'; '.join(rej.validation_errors) or rej.rationale}",
+                    is_simulated=is_simulated_exec,
+                )
+            )
+
+        if v_row is not None and v_row.status == "EMERGENCY_STOPPED":
+            if not estop_events:
+                estop_events.append(
+                    MissionReportSafetyEvent(
+                        record_id=f"{mission_id}-ESTOP-STATE",
+                        timestamp=datetime.now(timezone.utc).isoformat(),
+                        category="EMERGENCY_STOP",
+                        description="SCOUT01 is in latched EMERGENCY_STOPPED state.",
+                        stop_dispatched=True,
+                        vehicle_acknowledged=is_simulated_exec,
+                        physical_stop_confirmed=False,
+                        is_simulated=is_simulated_exec,
+                    )
+                )
+            unresolved_safety.append("SCOUT01 remains in latched EMERGENCY_STOPPED state.")
+
+        if v_row is not None and v_row.status == "FAULT":
+            unresolved_safety.append("SCOUT01 is in FAULT status.")
+        if crit_fault_events:
+            unresolved_safety.append(
+                f"{len(crit_fault_events)} critical stop/vehicle fault(s) recorded."
+            )
+        if min_bat <= 20.0:
+            unresolved_safety.append(
+                f"Critical low battery observed on SCOUT01 ({min_bat:.1f}% <= 20.0%)."
+            )
+        for rh in reported_hazards:
+            if not rh.handled:
+                unresolved_safety.append(
+                    f"Reported hazard {rh.hazard_id} ({rh.hazard_type}) remains unhandled."
+                )
+
+        stop_status_str = (
+            "No Emergency Stop events triggered during this mission."
+            if not estop_events
+            else (
+                "Emergency Stop triggered in SIMULATED mode; no physical hardware stop occurred."
+                if is_simulated_exec
+                else "Emergency Stop triggered; verify physical chassis kill switch and serial stop status."
+            )
+        )
+
+        safety_summary = MissionReportSafetySummary(
+            emergency_stop_events=estop_events,
+            safety_validation_failures=val_failure_events,
+            critical_faults=crit_fault_events,
+            stop_dispatch_acknowledged_status=stop_status_str,
+            unresolved_safety_issues=unresolved_safety,
+        )
+
+        # 7. Unresolved Items
+        incomplete_tasks_list = [
+            f"{tr.task_id} ({tr.task_type}, status={tr.status}, stage={tr.highest_evidence_stage})"
+            for tr in task_records
+            if tr.status != "COMPLETED"
+        ]
+        missing_obs_list: list[str] = []
+        if not sensor_obs_list and not detected_objects and not reported_hazards:
+            missing_obs_list.append(
+                "Zero sensor observations were persisted for this mission; environmental state was not empirically observed."
+            )
+
+        stale_items_list = [
+            f"Observation {so.observation_id} ({so.obs_type}) was marked STALE."
+            for so in sensor_obs_list
+            if so.is_stale or so.epistemic_status == "STALE"
+        ]
+        for obj in detected_objects:
+            if obj.epistemic_status == "STALE" or obj.tracking_status == "STALE":
+                stale_items_list.append(
+                    f"Tracked object {obj.object_id} ({obj.label}) transitioned to STALE."
+                )
+        for ev in event_rows:
+            if "OBSERVATION_STALE" in ev.message:
+                stale_items_list.append(f"Event {ev.id}: {ev.message}")
+
+        conflicting_list = [
+            f"Object {obj.object_id} ({obj.label}) has CONFLICTED sensor measurements."
+            for obj in detected_objects
+            if obj.epistemic_status == "CONFLICTED"
+        ]
+        for ev in event_rows:
+            if "SENSOR_CONFLICT" in ev.message and not any(ev.id in c for c in conflicting_list):
+                conflicting_list.append(f"Event {ev.id}: {ev.message}")
+
+        unverified_signals = [
+            "LiDAR sensor stream is UNAVAILABLE (topic, message type, frame, and extrinsics unconfirmed).",
+            "Global map transform (map -> odom -> oak_parent_frame) is unconfirmed.",
+            "Thermal and gas telemetry sensors on SCOUT01 are unimplemented.",
+        ]
+
+        unknown_outcomes: list[str] = []
+        if final_status_str != "COMPLETED":
+            unknown_outcomes.append(
+                f"Mission is in '{final_status_str}' state and has not completed."
+            )
+        if is_simulated_exec:
+            unknown_outcomes.append(
+                "All mission planning and task transitions occurred in SIMULATED mode; physical rover execution was not performed."
+            )
+        elif any(tr.highest_evidence_stage != "PHYSICAL_EXECUTION_CONFIRMED" for tr in task_records):
+            unknown_outcomes.append(
+                "Physical task completion is not confirmed by closed-loop localization."
+            )
+        if not persisted_snapshots:
+            unknown_outcomes.append(
+                "No historical World Model snapshots were persisted for this mission (pre-Phase-3 or legacy mission record)."
+            )
+
+        unresolved_items = MissionReportUnresolvedItems(
+            incomplete_tasks=incomplete_tasks_list,
+            missing_observations=missing_obs_list,
+            stale_telemetry_or_observations=stale_items_list,
+            conflicting_evidence=conflicting_list,
+            unverified_sensor_signals=unverified_signals,
+            unknown_outcomes=unknown_outcomes,
+        )
+
+        mode_tag = "SIMULATED EXECUTION" if is_simulated_exec else "REAL MODE"
+        summary_text = (
+            f"[{mode_tag}] Mission {mission_id} ('{mission_row.objective}') status: {final_status_str}. "
+            f"Tasks: {completed_cnt}/{len(task_records)} completed "
+            f"({pending_total_cnt} pending/assigned/in-progress, {cancelled_cnt} cancelled, {failed_cnt} failed). "
+            f"Findings: {len(detected_objects)} object(s), {len(reported_hazards)} hazard(s), "
+            f"{len(obstacles_list)} obstacle(s). "
+            f"Decisions: {len(standing_orders_applied)} Standing Order(s), "
+            f"{len(llm_triage_outcomes)} triage evaluation(s), "
+            f"{len(replanning_operations)} replan(s)."
+        )
+
+        generated_at = datetime.now(timezone.utc)
+        md_lines = [
+            f"# AFTER-ACTION MISSION REPORT — {mission_id}",
+            "",
+            f"- **Generated At (UTC)**: {generated_at.isoformat()}",
+            f"- **Execution Mode**: `{mode_tag}` (`vehicle_mode={vehicle_mode}`, `hardware_lockout={hw_lockout}`)",
+            f"- **Provenance**: {exec_provenance}",
+            f"- **Deterministic Report**: `True` (`llm_used_for_report=False`)",
+            "",
+            "## 1. Mission Overview",
+            f"- **Mission ID**: `{mission_id}`",
+            f"- **Objective**: {mission_row.objective}",
+            f"- **Final Status**: `{final_status_str}`",
+            f"- **Created At**: `{created_at.isoformat()}`",
+            f"- **Completed At**: `{completed_at.isoformat() if completed_at else 'INCOMPLETE'}`",
+            f"- **Duration (s)**: `{duration_sec if duration_sec is not None else 'N/A'}`",
+            "",
+            "## 2. Task Summary",
+            f"- **Total Tasks**: {len(task_records)} | **Completed**: {completed_cnt} | **Pending/Active**: {pending_total_cnt} | **Cancelled**: {cancelled_cnt} | **Failed**: {failed_cnt}",
+        ]
+        for tr in task_records:
+            md_lines.append(
+                f"  - `{tr.task_id}` [{tr.vehicle_id}] `{tr.task_type}` (P{tr.priority}) — Status: `{tr.status}`, Stage: `{tr.highest_evidence_stage}` ({tr.provenance_note})"
+            )
+
+        md_lines.extend(
+            [
+                "",
+                "## 3. Environmental Findings",
+                f"- **Coverage Note**: {coverage_note}",
+                f"- **Detected Objects ({len(detected_objects)})**: "
+                + (
+                    ", ".join(
+                        f"`{o.object_id}` ({o.label} in `{o.coordinate_frame}`, status=`{o.epistemic_status}`)"
+                        for o in detected_objects
+                    )
+                    or "None recorded"
+                ),
+                f"- **Reported Hazards ({len(reported_hazards)})**: "
+                + (
+                    ", ".join(
+                        f"`{h.hazard_id}` ({h.hazard_type} in `{h.coordinate_frame}`, conf={h.confidence:.2f})"
+                        for h in reported_hazards
+                    )
+                    or "None recorded"
+                ),
+                f"- **Coordinate-Frame Limitations**: {'; '.join(frame_limitations) or 'None'}",
+                "",
+                "## 4. ULTRON Decision History",
+                f"- **Standing Orders Applied ({len(standing_orders_applied)})**: "
+                + (
+                    ", ".join(
+                        f"`{so.standing_order_id}` (event `{so.source_event_id}` -> tasks {so.resulting_task_ids})"
+                        for so in standing_orders_applied
+                    )
+                    or "None"
+                ),
+                f"- **LLM Triage Evaluations ({len(llm_triage_outcomes)})**: "
+                + (
+                    ", ".join(
+                        f"`{tr_item.trace_id}` ({tr_item.event_id} -> `{tr_item.disposition}`)"
+                        for tr_item in llm_triage_outcomes
+                    )
+                    or "None"
+                ),
+                f"- **Replanning Operations ({len(replanning_operations)})**: "
+                + (
+                    ", ".join(
+                        f"`{rp.trace_id}` ({rp.trigger})" for rp in replanning_operations
+                    )
+                    or "None"
+                ),
+                f"- **Rejected Decisions ({len(rejected_decisions)})**: "
+                + (
+                    ", ".join(f"`{rj.trace_id}`" for rj in rejected_decisions)
+                    or "None"
+                ),
+                "",
+                "## 5. Vehicle & Safety Summary",
+                f"- **Vehicle**: `SCOUT01` (mode=`{vehicle_mode}`, status=`{vehicle_summary.final_status}`, connection=`{vehicle_summary.final_connection}`)",
+                f"- **Battery**: min=`{min_bat:.1f}%`, max=`{max_bat:.1f}%`, final=`{final_bat:.1f}%`",
+                f"- **Emergency Stop Status**: {stop_status_str}",
+                f"- **Unresolved Safety Issues**: {'; '.join(unresolved_safety) or 'None'}",
+                "",
+                "## 6. Unresolved Items & Gaps",
+                f"- **Incomplete Tasks**: {'; '.join(incomplete_tasks_list) or 'None'}",
+                f"- **Missing Observations**: {'; '.join(missing_obs_list) or 'None'}",
+                f"- **Conflicting Evidence**: {'; '.join(conflicting_list) or 'None'}",
+                f"- **Unknown Outcomes**: {'; '.join(unknown_outcomes) or 'None'}",
+            ]
+        )
+
+        return MissionReportResponse(
+            mission_id=mission_id,
+            generated_at=generated_at,
+            report_deterministic=True,
+            llm_used_for_report=False,
+            historical_snapshots_count=len(persisted_snapshots),
+            historical_state_available=len(persisted_snapshots) > 0,
+            summary_text=summary_text,
+            overview=overview,
+            task_summary=task_summary,
+            environmental_findings=environmental_findings,
+            decision_history=decision_history,
+            vehicle_summary=vehicle_summary,
+            safety_summary=safety_summary,
+            unresolved_items=unresolved_items,
+            markdown_export="\n".join(md_lines),
+        )
 
     async def complete_mission(
         self,

@@ -532,6 +532,334 @@ class MissionReplayResponse(SchemaBase):
 
 
 # ---------------------------------------------------------------------------
+# Phase 3 After-Action Mission Report Schemas (`GET /mission/{id}/report`)
+# ---------------------------------------------------------------------------
+
+TaskEvidenceStageLiteral = Literal[
+    "PLANNED",
+    "ASSIGNED",
+    "COMMAND_ACCEPTED",
+    "COMMAND_DISPATCHED",
+    "VEHICLE_ACKNOWLEDGED",
+    "PHYSICAL_EXECUTION_CONFIRMED",
+    "SIMULATED_COMPLETED",
+    "IN_PROGRESS",
+    "CANCELLED",
+    "FAILED",
+]
+
+
+class MissionReportOverview(SchemaBase):
+    """Mission overview section of the After-Action Report."""
+
+    mission_id: IdentifierStr
+    objective: str
+    created_at: datetime
+    completed_at: datetime | None = None
+    duration_seconds: float | None = None
+    final_status: str
+    vehicle_mode: str = "simulated"
+    is_simulated_execution: bool = True
+    hardware_lockout_active: bool = True
+    execution_provenance: str
+
+    @field_validator("created_at", "completed_at", mode="after")
+    @classmethod
+    def _normalize_timestamps(cls, value: datetime | None) -> datetime | None:
+        return ensure_utc_datetime(value)
+
+
+class MissionReportTaskRecord(SchemaBase):
+    """Individual task execution and provenance record in the After-Action Report."""
+
+    task_id: str
+    vehicle_id: str = "SCOUT01"
+    task_type: str
+    area: str | None = None
+    target: str | None = None
+    priority: int = 1
+    status: str
+    highest_evidence_stage: TaskEvidenceStageLiteral = "ASSIGNED"
+    is_simulated: bool = True
+    source_trace_ids: list[str] = Field(default_factory=list)
+    provenance_note: str
+
+
+class MissionReportTaskSummary(SchemaBase):
+    """Task statistics and execution breakdown in the After-Action Report."""
+
+    total_tasks: int = Field(ge=0)
+    completed_tasks: int = Field(ge=0)
+    pending_tasks: int = Field(ge=0)
+    assigned_tasks: int = Field(default=0, ge=0)
+    in_progress_tasks: int = Field(default=0, ge=0)
+    failed_tasks: int = Field(ge=0)
+    cancelled_tasks: int = Field(ge=0)
+    tasks: list[MissionReportTaskRecord] = Field(default_factory=list)
+
+
+class MissionReportObjectFinding(SchemaBase):
+    """Detected object, target, or obstacle finding in the After-Action Report."""
+
+    object_id: str
+    label: str
+    coordinate_frame: str
+    position_x: float
+    position_y: float
+    position_z: float = 0.0
+    range_m: float | None = None
+    map_position_x: float | None = None
+    map_position_y: float | None = None
+    confidence: float = Field(ge=0.0, le=1.0)
+    epistemic_status: str = "OBSERVED"
+    tracking_status: str = "ACTIVE"
+    source_mode: str = "simulated"
+    is_obstacle: bool = False
+    is_hazard: bool = False
+    matches_objective_target: bool = False
+    evidence_ids: list[str] = Field(default_factory=list)
+    coordinate_frame_note: str
+
+
+class MissionReportHazardFinding(SchemaBase):
+    """Reported hazard finding in the After-Action Report."""
+
+    hazard_id: str
+    hazard_type: str
+    coordinate_frame: str
+    position_x: float
+    position_y: float
+    confidence: float = Field(ge=0.0, le=1.0)
+    epistemic_status: str = "OBSERVED"
+    source_mode: str = "simulated"
+    source_vehicle: str = "SCOUT01"
+    evidence_ids: list[str] = Field(default_factory=list)
+    handled: bool = False
+    coordinate_frame_note: str
+
+
+class MissionReportObservationFinding(SchemaBase):
+    """Persisted sensor observation record in the After-Action Report."""
+
+    observation_id: str
+    vehicle_id: str
+    sensor_type: str
+    obs_type: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    coordinate_frame: str
+    position_x: float
+    position_y: float
+    position_z: float = 0.0
+    range_m: float | None = None
+    timestamp: str
+    source_mode: str = "simulated"
+    epistemic_status: str = "OBSERVED"
+    is_stale: bool = False
+
+
+class MissionReportEnvironmentalFindings(SchemaBase):
+    """Environmental findings section of the After-Action Report."""
+
+    detected_objects: list[MissionReportObjectFinding] = Field(default_factory=list)
+    identified_targets: list[MissionReportObjectFinding] = Field(default_factory=list)
+    reported_hazards: list[MissionReportHazardFinding] = Field(default_factory=list)
+    obstacles: list[MissionReportObjectFinding] = Field(default_factory=list)
+    sensor_observations: list[MissionReportObservationFinding] = Field(default_factory=list)
+    evidence_references: list[str] = Field(default_factory=list)
+    coordinate_frame_limitations: list[str] = Field(default_factory=list)
+    coverage_note: str
+
+
+class MissionReportEventRecord(SchemaBase):
+    """Important event entry in the After-Action Report."""
+
+    event_id: str
+    timestamp: datetime
+    category: str
+    event_type: str | None = None
+    severity: str = "INFO"
+    source: str = "mission"
+    source_mode: str = "simulated"
+    message: str
+    evidence_ids: list[str] = Field(default_factory=list)
+
+    @field_validator("timestamp", mode="after")
+    @classmethod
+    def _normalize_ts(cls, value: datetime) -> datetime:
+        normalized = ensure_utc_datetime(value)
+        assert normalized is not None
+        return normalized
+
+
+class MissionReportStandingOrderRecord(SchemaBase):
+    """Standing Order application record in the After-Action Report."""
+
+    standing_order_id: str
+    source_event_id: str | None = None
+    trace_id: str | None = None
+    timestamp: str
+    rationale: str
+    resulting_task_ids: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
+class MissionReportTriageRecord(SchemaBase):
+    """LLM or deterministic triage outcome record in the After-Action Report."""
+
+    trace_id: str
+    event_id: str | None = None
+    event_type: str | None = None
+    disposition: str
+    severity: str = "INFO"
+    triage_source: str = "fallback"
+    rationale: str
+    evidence_ids: list[str] = Field(default_factory=list)
+    timestamp: str
+
+
+class MissionReportDecisionRecord(SchemaBase):
+    """Planning, replanning, or rejected decision record in the After-Action Report."""
+
+    trace_id: str
+    timestamp: datetime
+    trigger: str
+    rationale: str
+    source_event_id: str | None = None
+    standing_order_id: str | None = None
+    triage_disposition: str | None = None
+    planner_source: str | None = None
+    validation_passed: bool = True
+    validation_errors: list[str] = Field(default_factory=list)
+    resulting_task_ids: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    before_snapshot_id: str | None = None
+    after_snapshot_id: str | None = None
+
+    @field_validator("timestamp", mode="after")
+    @classmethod
+    def _normalize_ts(cls, value: datetime) -> datetime:
+        normalized = ensure_utc_datetime(value)
+        assert normalized is not None
+        return normalized
+
+
+class MissionReportEscalationRecord(SchemaBase):
+    """Human operator escalation event in the After-Action Report."""
+
+    record_id: str
+    timestamp: str
+    reason: str
+    source_event_id: str | None = None
+    standing_order_id: str | None = None
+
+
+class MissionReportDecisionHistory(SchemaBase):
+    """ULTRON Decision History section of the After-Action Report."""
+
+    important_events: list[MissionReportEventRecord] = Field(default_factory=list)
+    standing_orders_applied: list[MissionReportStandingOrderRecord] = Field(
+        default_factory=list
+    )
+    llm_triage_outcomes: list[MissionReportTriageRecord] = Field(default_factory=list)
+    replanning_operations: list[MissionReportDecisionRecord] = Field(
+        default_factory=list
+    )
+    rejected_decisions: list[MissionReportDecisionRecord] = Field(default_factory=list)
+    accepted_plans: list[MissionReportDecisionRecord] = Field(default_factory=list)
+    human_escalation_events: list[MissionReportEscalationRecord] = Field(
+        default_factory=list
+    )
+
+
+class MissionReportBatteryRecord(SchemaBase):
+    """Battery observation summary for a vehicle during the mission."""
+
+    min_battery: float = Field(ge=0.0, le=100.0)
+    max_battery: float = Field(ge=0.0, le=100.0)
+    final_battery: float = Field(ge=0.0, le=100.0)
+    sample_count: int = Field(ge=0)
+    critical_low_battery_observed: bool = False
+
+
+class MissionReportVehicleSummary(SchemaBase):
+    """Vehicle summary section of the After-Action Report."""
+
+    vehicle_id: str = "SCOUT01"
+    vehicle_type: str = "ground"
+    mode: str = "simulated"
+    final_status: str
+    final_connection: str
+    connection_history: list[str] = Field(default_factory=list)
+    battery_observations: MissionReportBatteryRecord
+    task_participation_ids: list[str] = Field(default_factory=list)
+    communication_failures: list[str] = Field(default_factory=list)
+    operational_limitations: list[str] = Field(default_factory=list)
+
+
+class MissionReportSafetyEvent(SchemaBase):
+    """Safety event, validation failure, or critical fault record in the After-Action Report."""
+
+    record_id: str
+    timestamp: str
+    category: Literal["EMERGENCY_STOP", "VALIDATION_FAILURE", "CRITICAL_FAULT", "SAFETY_WARNING"]
+    description: str
+    stop_dispatched: bool | None = None
+    vehicle_acknowledged: bool | None = None
+    physical_stop_confirmed: bool | None = None
+    is_simulated: bool = True
+
+
+class MissionReportSafetySummary(SchemaBase):
+    """Safety summary section of the After-Action Report."""
+
+    emergency_stop_events: list[MissionReportSafetyEvent] = Field(default_factory=list)
+    safety_validation_failures: list[MissionReportSafetyEvent] = Field(
+        default_factory=list
+    )
+    critical_faults: list[MissionReportSafetyEvent] = Field(default_factory=list)
+    stop_dispatch_acknowledged_status: str
+    unresolved_safety_issues: list[str] = Field(default_factory=list)
+
+
+class MissionReportUnresolvedItems(SchemaBase):
+    """Unresolved items, gaps, conflicts, and unknowns in the After-Action Report."""
+
+    incomplete_tasks: list[str] = Field(default_factory=list)
+    missing_observations: list[str] = Field(default_factory=list)
+    stale_telemetry_or_observations: list[str] = Field(default_factory=list)
+    conflicting_evidence: list[str] = Field(default_factory=list)
+    unverified_sensor_signals: list[str] = Field(default_factory=list)
+    unknown_outcomes: list[str] = Field(default_factory=list)
+
+
+class MissionReportResponse(SchemaBase):
+    """Dedicated structured After-Action Mission Report returned by GET /mission/{id}/report."""
+
+    mission_id: IdentifierStr
+    generated_at: datetime
+    report_deterministic: bool = True
+    llm_used_for_report: bool = False
+    historical_snapshots_count: int = Field(default=0, ge=0)
+    historical_state_available: bool = True
+    summary_text: str
+    overview: MissionReportOverview
+    task_summary: MissionReportTaskSummary
+    environmental_findings: MissionReportEnvironmentalFindings
+    decision_history: MissionReportDecisionHistory
+    vehicle_summary: MissionReportVehicleSummary
+    safety_summary: MissionReportSafetySummary
+    unresolved_items: MissionReportUnresolvedItems
+    markdown_export: str
+
+    @field_validator("generated_at", mode="after")
+    @classmethod
+    def _normalize_generated_at(cls, value: datetime) -> datetime:
+        normalized = ensure_utc_datetime(value)
+        assert normalized is not None
+        return normalized
+
+
+# ---------------------------------------------------------------------------
 # Static Floor-Plan Configuration Schemas (§7, §8.2 — Hardware/IoT §11 stub)
 # ---------------------------------------------------------------------------
 
