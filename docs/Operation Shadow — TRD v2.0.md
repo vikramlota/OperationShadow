@@ -4,6 +4,8 @@
 
 **Version:** 2.0 **Architecture:** Laptop + Raspberry Pi (SCOUT) + ESP32/Arduino (SCOUT drivetrain) + Flight Controller (HAWK) **Deployment:** Local network / no cloud (except the LLM planning call)
 
+> **Current Implementation Status Note (Phase 4 — 2026-11-03):** This document is preserved as the original **TRD v2.0** specification. In the active implementation, **SCOUT01** is the sole integrated vehicle in ULTRON, the FastAPI backend, and the React operations console, while **HAWK01** remains **simulated / roadmap, not integrated**. Rover perception uses read-only ROS 2 Humble `rosbridge_suite` (`/detections_json` in `oak_rgb_camera_optical_frame`), and physical actuation remains locked by default (`SHADOW_HARDWARE_LOCKOUT=true`). See [PRODUCT_LANGUAGE.md](./PRODUCT_LANGUAGE.md) and [assumptions.md](./assumptions.md) for current implementation status.
+
 > **v2.0 changelog:** Adds **HAWK** as a second, aerial vehicle under ULTRON's command. Simplifies the communication stack from MQTT+WebSocket+serial to a single WebSocket channel end-to-end, with serial retained only for the ESP32 hop. Defers occupancy-grid/A\* navigation and the on-robot local SLM to stretch goals. Adds resilience features (simulated vehicle mode, cached mission plan, reasoning-trace logging) as first-class requirements, not afterthoughts.
 
 ---

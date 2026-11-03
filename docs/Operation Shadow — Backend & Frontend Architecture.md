@@ -4,6 +4,8 @@
 
 **Version:** 1.0 **Scope:** The FastAPI service layer that connects ULTRON's agent logic (see ULTRON Agent Architecture doc) to both vehicles and to the React dashboard, plus the dashboard itself. Does not repeat vehicle hardware/wiring (Hardware & IoT doc) or ULTRON's planning/replanning internals (Agent Architecture doc) — this document is about the plumbing and the UI that sit around them.
 
+> **Current Implementation Status Note (Phase 4 — 2026-11-03):** This document is preserved as the original **Backend & Frontend Architecture v1.0** specification. In the active implementation (`backend/fastapi/` and `frontend/src/`), **SCOUT01** is the sole active integrated vehicle while **HAWK01** remains **simulated / roadmap, not integrated**. The backend and dashboard additionally include read-only ROS 2 Humble perception (`/detections_json`, [rosbridge-integration.md](./rosbridge-integration.md)), persistent `mission_snapshots` ([MISSION_MEMORY.md](./MISSION_MEMORY.md)), before/after Mission Replay ([MISSION_REPLAY.md](./MISSION_REPLAY.md)), and deterministic After-Action Reports (`GET /mission/{id}/report`, [AFTER_ACTION_REPORTS.md](./AFTER_ACTION_REPORTS.md)). See [PRODUCT_LANGUAGE.md](./PRODUCT_LANGUAGE.md) and [assumptions.md](./assumptions.md).
+
 ---
 
 ## 1. Purpose & Scope

@@ -4,6 +4,8 @@
 
 **Version:** 2.0 **Date:** September 2026 **Product Type:** Autonomous multi-vehicle AI mission system (ground + aerial) **Target:** Hackathon MVP — Demo Date **October 31, 2026** **Build Window:** October 1 – October 31, 2026
 
+> **Current Implementation Status Note (Phase 4 — 2026-11-03):** This document is preserved as the original September 2026 **PRD v2.0** specification. In the active implementation, **SCOUT01** is the sole integrated vehicle in ULTRON, the FastAPI backend, and the React operations console, while **HAWK01** remains **simulated / roadmap, not integrated**. Default operation runs in simulation with hardware lockout engaged (`SHADOW_HARDWARE_LOCKOUT=true`). See [PRODUCT_LANGUAGE.md](./PRODUCT_LANGUAGE.md) and [assumptions.md](./assumptions.md) for current implementation scope and verified capabilities.
+
 > **v2.0 changelog:** Adds **HAWK**, an aerial vehicle operating alongside **SCOUT**, both dispatched by **ULTRON**. Revises P0/P1 scope based on a build-risk review against the four-week timeline. Local on-robot SLM is demoted from P0 to a stretch goal. Adds dashboard and reliability features (reasoning trace, mission replay, simulated fallback mode) designed specifically to protect the demo against live-hardware failure.
 
 ---

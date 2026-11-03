@@ -4,6 +4,8 @@
 
 **Version:** 1.0 **Scope:** The internal design of ULTRON itself — mission understanding, planning, replanning, world model, memory, safety validation, and failure handling. This document assumes the vehicle-facing schema and command set already defined in TRD v2.0 (§6–7) and does not repeat hardware or dashboard design, which are covered in their own documents.
 
+> **Current Implementation Status Note (Phase 4 — 2026-11-03):** This document is preserved as the original **ULTRON Agent Architecture v1.0** specification. In the active implementation (`ultron/`), ULTRON coordinates **SCOUT01** as the sole active vehicle (**HAWK01** is **simulated / roadmap, not integrated**) and has been extended with bounded Gemini timeouts & circuit breaker ([PHASE1_REPORT.md](./PHASE1_REPORT.md)), an `EventRouter`, declarative **Standing Orders**, and bounded **LLM Event Triage** ([PHASE2_REPORT.md](./PHASE2_REPORT.md)), and persistent immutable **Mission Memory** snapshots ([MISSION_MEMORY.md](./MISSION_MEMORY.md)). See [PRODUCT_LANGUAGE.md](./PRODUCT_LANGUAGE.md) and [assumptions.md](./assumptions.md).
+
 ---
 
 ## 1. Purpose & Boundary
