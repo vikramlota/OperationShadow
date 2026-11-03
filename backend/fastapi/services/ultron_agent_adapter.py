@@ -315,8 +315,8 @@ class UltronLangGraphAgent(UltronAgentPort):
         self.event_router.clear()
         self._pending_replan = None
 
-        if had_pending_triage:
-            self._triage_discarded_stale_count += len(self._triage_heap)
+        if had_pending_triage or had_active_triage:
+            self._triage_discarded_stale_count += max(1, len(self._triage_heap))
             self._triage_heap.clear()
         if had_active_triage and self._active_triage_task is not None:
             self._active_triage_task.cancel()
