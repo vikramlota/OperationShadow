@@ -9,16 +9,19 @@ from ultron.planner.cache import get_fallback_plan
 from ultron.planner.grounding import validate_plan_evidence
 from ultron.world_model.tools import WorldModelTools
 
-# Automatically load .env if available
-try:
-    import dotenv
-    root_dir = Path(__file__).resolve().parent.parent.parent
-    for env_path in [root_dir / ".env", Path(".env")]:
-        if env_path.is_file():
-            dotenv.load_dotenv(env_path, override=True)
-            break
-except ImportError:
-    pass
+import sys
+
+# Automatically load .env only outside pytest and never override explicit environment variables
+if "pytest" not in sys.modules and "PYTEST_CURRENT_TEST" not in os.environ:
+    try:
+        import dotenv
+        root_dir = Path(__file__).resolve().parent.parent.parent
+        for env_path in [root_dir / ".env", Path(".env")]:
+            if env_path.is_file():
+                dotenv.load_dotenv(env_path, override=False)
+                break
+    except ImportError:
+        pass
 
 # Default timeouts — overridden by UltronConfig when available
 _PLANNING_TIMEOUT_SEC: float = 30.0

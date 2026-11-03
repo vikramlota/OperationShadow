@@ -164,8 +164,10 @@ def ingest_sensor_observation(
         else ultron_config.fusion_conflict_distance_m
     )
 
-    # 1. Record in observation history
+    # 1. Record in observation history (with bounded retention to prevent unbounded RAM growth)
     world.environment.observation_history.append(obs)
+    if len(world.environment.observation_history) > 500:
+        world.environment.observation_history = world.environment.observation_history[-500:]
     world.environment.last_updated_timestamp = max(
         world.environment.last_updated_timestamp or 0.0,
         obs.ingested_at,

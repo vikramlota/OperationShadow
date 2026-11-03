@@ -1,7 +1,7 @@
 """Vehicle state, heartbeat timeout monitor, and SQLite synchronization service (§3, §5.1, §6, §7).
 
 Responsibilities:
-1. Manage vehicle adapters (`SCOUT01` and `HAWK01`) via `VehicleAdapterPort`,
+1. Manage the `SCOUT01` vehicle adapter via `VehicleAdapterPort`,
    enforcing `SHADOW_HARDWARE_LOCKOUT` so real hardware cannot be controlled
    until TRD v2.0 and Hardware & IoT specifications are confirmed.
 2. Track vehicle heartbeats using a testable `ClockPort` and transition vehicles
@@ -452,7 +452,7 @@ class VehicleService:
         except ValueError as exc:
             raise HardwareLockoutError(str(exc)) from exc
 
-        vehicle_type: VehicleType = "ground" if vid == "SCOUT01" else "aerial"
+        vehicle_type: VehicleType = "ground"
         if mode == "real":
             self._adapters[vid] = LockedRealVehicleAdapter(vid, vehicle_type)
         else:

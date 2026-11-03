@@ -44,13 +44,19 @@ export function ReasoningTracePanel(): React.JSX.Element {
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "4px" }} aria-label="Reasoning Trace Entries">
-            {state.reasoningTraces.map((trace) => {
+            {state.reasoningTraces.map((trace, idx) => {
               const isStubRationale =
                 state.ultronIsStub ||
                 trace.rationale.toUpperCase().includes("ULTRON_STUB");
-              const matchingDt = decisionTraces.find(
+              const missionDecisionTraces = decisionTraces.filter(
                 (dt) => dt.mission_id === trace.mission_id,
               );
+              const traceIdxInMission = state.reasoningTraces
+                .slice(0, idx)
+                .filter((t) => t.mission_id === trace.mission_id).length;
+              const matchingDt =
+                missionDecisionTraces[traceIdxInMission] ??
+                missionDecisionTraces[missionDecisionTraces.length - 1];
               return (
                 <div key={trace.id} className="log-entry log-entry-nominal">
                   <div className="log-meta" style={{ display: "flex", justifyContent: "space-between" }}>

@@ -1,5 +1,5 @@
 from ultron.config import load_json_config
-from ultron.schemas.commands import Position2D, Position3D, ScoutAction, HawkAction
+from ultron.schemas.commands import Position2D, Position3D, ScoutAction
 from ultron.schemas.mission import VehicleID
 
 _DEFAULT_GEOFENCE = {
@@ -30,16 +30,6 @@ SCOUT_ALLOWED_ACTIONS = {
     ScoutAction.REPORT.value,
     "FIND_TARGET",
     "HOLD_POSITION",
-}
-
-HAWK_ALLOWED_ACTIONS = {
-    HawkAction.TAKEOFF,
-    HawkAction.PATROL,
-    HawkAction.HOVER_SCAN,
-    HawkAction.RETURN_HOME,
-    HawkAction.LAND,
-    HawkAction.STOP,
-    HawkAction.REPORT,
 }
 
 

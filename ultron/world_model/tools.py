@@ -292,11 +292,12 @@ def get_detected_objects(
     include_stale: bool = True,
     label_filter: Optional[str] = None,
     current_time: Optional[float] = None,
+    _precomputed_health: Optional[SensorHealthQueryResult] = None,
 ) -> DetectedObjectsResult:
     """Retrieve all tracked objects in the World Model with freshness and provenance (§6)."""
     now = _resolve_now(world, current_time)
     stale_thresh = ultron_config.camera_stale_after_sec
-    health = get_sensor_health(world, current_time=now)
+    health = _precomputed_health or get_sensor_health(world, current_time=now)
 
     evaluated: List[TrackedObject] = []
     active_count = 0
@@ -485,6 +486,7 @@ def get_free_space(
     *,
     coordinate_frame: str = "map",
     current_time: Optional[float] = None,
+    _precomputed_health: Optional[SensorHealthQueryResult] = None,
 ) -> FreeSpaceResult:
     """Assess verified free space around `reference_position` (§4, §6, §7)."""
     now = _resolve_now(world, current_time)
@@ -500,7 +502,7 @@ def get_free_space(
     else:
         ref_3d = reference_position
 
-    health = get_sensor_health(world, current_time=now)
+    health = _precomputed_health or get_sensor_health(world, current_time=now)
     warnings = list(health.warnings)
 
     if not health.lidar_available or world.environment.free_space_coverage_m is None:
@@ -685,8 +687,17 @@ def get_environment_snapshot(
     """Retrieve a complete, structured, read-only environmental intelligence snapshot (§6)."""
     now = _resolve_now(world, current_time)
     health = get_sensor_health(world, current_time=now)
-    detected = get_detected_objects(world, include_stale=True, current_time=now)
-    free_space = get_free_space(world, current_time=now)
+    detected = get_detected_objects(
+        world,
+        include_stale=True,
+        current_time=now,
+        _precomputed_health=health,
+    )
+    free_space = get_free_space(
+        world,
+        current_time=now,
+        _precomputed_health=health,
+    )
     vehicles_out = {
         vid: get_vehicle_pose(world, vid)
         for vid in world.vehicles

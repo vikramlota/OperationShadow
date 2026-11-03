@@ -1,4 +1,5 @@
 import time
+from typing import Literal
 import uuid
 from ultron.state import UltronState, UltronStateUpdate
 from ultron.planner.engine import invoke_gemini_planner
@@ -86,6 +87,11 @@ def node_assign(state: UltronState) -> UltronStateUpdate:
             sensor_sources.add(f"{sid}:{sh.status.value}")
 
         trigger_str = state.get("trigger_rationale") or "INITIAL_MISSION_PLANNING"
+        confidence_val: Literal["high", "medium", "low", "unavailable"] = (
+            valid_plan.confidence  # type: ignore[assignment]
+            if valid_plan.confidence in ("high", "medium", "low", "unavailable")
+            else "medium"
+        )
         trace = DecisionTraceEntry(
             trace_id=f"DT-{uuid.uuid4().hex[:8].upper()}",
             mission_id=world.mission.id or "M001",
@@ -106,17 +112,15 @@ def node_assign(state: UltronState) -> UltronStateUpdate:
             validation_errors=[],
             replanning_triggered=bool(state.get("trigger_rationale")),
             resulting_task_ids=[t.id for t in valid_plan.tasks],
-            confidence_level=(
-                valid_plan.confidence
-                if valid_plan.confidence in ("high", "medium", "low", "unavailable")
-                else "medium"
-            ),  # type: ignore[arg-type]
+            confidence_level=confidence_val,
             is_simulated=any(
                 getattr(v.mode, "value", str(v.mode)) == "simulated"
                 for v in world.vehicles.values()
             ),
         )
         world.environment.decision_traces.append(trace)
+        if len(world.environment.decision_traces) > 100:
+            world.environment.decision_traces = world.environment.decision_traces[-100:]
 
     # Mark active hazards/objects/tracked_objects as handled so they do not continuously retrigger replanning
     for h in world.environment.hazards:
@@ -136,8 +140,12 @@ def node_evaluate(state: UltronState) -> UltronStateUpdate:
 
 
 def node_degraded(state: UltronState) -> UltronStateUpdate:
-    """Issues safe default commands (HOLD POSITION) and records rejection trace if retries are exhausted."""
+    """Issues safe default commands (HOLD POSITION), clears rejected plan, and records rejection trace if retries are exhausted."""
+    from ultron.schemas.mission import MissionStatus
+
     world = state["world"]
+    world.mission.status = MissionStatus.DEGRADED
+    world.mission.tasks.active.clear()
     now = time.time()
     errors = list(state.get("validation_errors", []))
     trace = DecisionTraceEntry(
@@ -161,4 +169,11 @@ def node_degraded(state: UltronState) -> UltronStateUpdate:
         is_simulated=True,
     )
     world.environment.decision_traces.append(trace)
-    return {"world": world, "validation_errors": [], "repair_prompt": None}
+    if len(world.environment.decision_traces) > 100:
+        world.environment.decision_traces = world.environment.decision_traces[-100:]
+    return {
+        "world": world,
+        "proposed_plan": None,
+        "validation_errors": errors,
+        "repair_prompt": None,
+    }

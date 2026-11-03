@@ -154,11 +154,19 @@ class DashboardGateway:
             .options(selectinload(Mission.tasks))
         )
         latest_mission = (await session.execute(mission_stmt)).scalar_one_or_none()
-        mission_detail = (
-            MissionDetailRead.model_validate(latest_mission)
-            if latest_mission is not None
-            else None
-        )
+        mission_detail: MissionDetailRead | None = None
+        if latest_mission is not None:
+            sorted_tasks = sorted(
+                latest_mission.tasks, key=lambda t: (t.priority, t.id)
+            )
+            mission_detail = MissionDetailRead(
+                id=latest_mission.id,
+                objective=latest_mission.objective,
+                status=MissionStatusEnum(latest_mission.status),
+                created_at=latest_mission.created_at,
+                completed_at=latest_mission.completed_at,
+                tasks=[TaskRead.model_validate(t) for t in sorted_tasks],
+            )
 
         vehicle_rows = (
             await session.execute(
@@ -177,15 +185,16 @@ class DashboardGateway:
             events_stmt = events_stmt.where(Event.mission_id == latest_mission.id)
             traces_stmt = traces_stmt.where(ReasoningTrace.mission_id == latest_mission.id)
 
-        events_stmt = events_stmt.order_by(Event.timestamp.asc(), Event.id.asc()).limit(
+        # Fetch the most recent N events/traces (DESC) and restore chronological (ASC) order
+        events_stmt = events_stmt.order_by(Event.timestamp.desc(), Event.id.desc()).limit(
             self._recent_events_limit
         )
         traces_stmt = traces_stmt.order_by(
-            ReasoningTrace.timestamp.asc(), ReasoningTrace.id.asc()
+            ReasoningTrace.timestamp.desc(), ReasoningTrace.id.desc()
         ).limit(self._recent_traces_limit)
 
-        event_rows = (await session.execute(events_stmt)).scalars().all()
-        trace_rows = (await session.execute(traces_stmt)).scalars().all()
+        event_rows = list(reversed((await session.execute(events_stmt)).scalars().all()))
+        trace_rows = list(reversed((await session.execute(traces_stmt)).scalars().all()))
 
         if self._on_during_snapshot_hook is not None:
             await self._on_during_snapshot_hook()

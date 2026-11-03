@@ -138,8 +138,9 @@ def _default_ros_topic_factory(
     message_type: str,
 ) -> RosTopicLike:
     """Instantiate a real `roslibpy.Topic` subscriber with reconnect_on_close enabled."""
+    ros_any: Any = ros_client
     topic: Any = roslibpy.Topic(
-        ros=ros_client,
+        ros=ros_any,
         name=topic_name,
         message_type=message_type,
         reconnect_on_close=True,

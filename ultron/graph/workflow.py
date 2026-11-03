@@ -4,6 +4,8 @@ from ultron.graph.nodes import (
     node_plan, node_validate, node_assign, node_evaluate, node_degraded
 )
 
+MAX_PLAN_VALIDATION_ATTEMPTS = 3
+
 
 class GraphRunner(Protocol):
     def invoke(
@@ -24,7 +26,7 @@ def route_validation(state: UltronState) -> str:
     """Routes based on whether the plan passed the Safety Validator."""
     if not state.get("validation_errors"):
         return "assign"
-    if state.get("retry_count", 0) >= 3:
+    if state.get("retry_count", 0) >= MAX_PLAN_VALIDATION_ATTEMPTS:
         return "degraded"
     return "plan"
 
@@ -93,32 +95,33 @@ def build_ultron_graph() -> GraphRunner:
     except ImportError:
         # Fallback runner for testing when langgraph is not installed
         class SimpleGraphRunner:
+            def _plan_and_validate_with_retries(self, st: dict[str, Any]) -> None:
+                for _attempt in range(MAX_PLAN_VALIDATION_ATTEMPTS):
+                    st.update(node_plan(cast(UltronState, st)))
+                    st.update(node_validate(cast(UltronState, st)))
+                    if not st.get("validation_errors"):
+                        st.update(node_assign(cast(UltronState, st)))
+                        return
+                    if int(st.get("retry_count", 0)) >= MAX_PLAN_VALIDATION_ATTEMPTS:
+                        break
+                st.update(node_degraded(cast(UltronState, st)))
+
             def invoke(
                 self,
                 state: UltronState,
                 config: Any = None,
             ) -> UltronState:
-                st = cast(UltronState, dict(state))
+                st: dict[str, Any] = dict(state)
                 # If a plan already exists, run evaluate -> replan (if needed)
                 if st.get("proposed_plan") is not None:
-                    st.update(node_evaluate(st))  # type: ignore[typeddict-item]
+                    st.update(node_evaluate(cast(UltronState, st)))
                     if st.get("trigger_rationale"):
-                        st.update(node_plan(st))  # type: ignore[typeddict-item]
-                        st.update(node_validate(st))  # type: ignore[typeddict-item]
-                        if not st.get("validation_errors"):
-                            st.update(node_assign(st))  # type: ignore[typeddict-item]
-                        else:
-                            st.update(node_degraded(st))  # type: ignore[typeddict-item]
-                    return st
+                        self._plan_and_validate_with_retries(st)
+                    return cast(UltronState, st)
 
-                # Initial planning pass: plan -> validate -> assign
-                st.update(node_plan(st))  # type: ignore[typeddict-item]
-                st.update(node_validate(st))  # type: ignore[typeddict-item]
-                if not st.get("validation_errors"):
-                    st.update(node_assign(st))  # type: ignore[typeddict-item]
-                else:
-                    st.update(node_degraded(st))  # type: ignore[typeddict-item]
-                return st
+                # Initial planning pass: plan -> validate (with bounded retries) -> assign / degraded
+                self._plan_and_validate_with_retries(st)
+                return cast(UltronState, st)
 
         return SimpleGraphRunner()
 

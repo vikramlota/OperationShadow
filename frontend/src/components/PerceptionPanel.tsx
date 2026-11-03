@@ -248,8 +248,12 @@ export function PerceptionPanel({
   const camHealth = det.sensorHealth["depth_camera"];
   const lidarHealth = det.sensorHealth["lidar"];
   const trackedList = det.trackedObjects ?? [];
+  const safeSelectedIndex =
+    trackedList.length > 0
+      ? Math.min(selectedObjectIndex, trackedList.length - 1)
+      : 0;
   const selectedTracked: TrackedObjectPayload | undefined =
-    trackedList[selectedObjectIndex] ?? trackedList[0];
+    trackedList[safeSelectedIndex];
 
   const handleEnvQuerySubmit = async (
     e: React.FormEvent<HTMLFormElement>,

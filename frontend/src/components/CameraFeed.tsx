@@ -33,6 +33,7 @@ export function CameraFeed(): React.JSX.Element {
   const [streamError, setStreamError] = useState<boolean>(false);
   const [rosFrame, setRosFrame] = useState<string>("");
   const [rosStatus, setRosStatus] = useState<CameraFeedStatus>("connecting");
+  const [isExpanded, setIsExpanded] = useState<boolean>(false);
 
   const activeUrl = streamUrl.trim();
   const hasError = streamError;
@@ -145,14 +146,28 @@ export function CameraFeed(): React.JSX.Element {
   };
 
   return (
-    <section className="panel" aria-label="Camera Feed">
+    <section
+      className={`panel${isExpanded ? " camera-panel-expanded" : ""}`}
+      aria-label="Camera Feed"
+    >
       <div className="panel-header">
         <h2 className="panel-title">
           OPTICAL FEED // {selectedCamera}
         </h2>
-        <span className="badge">
-          {vehicleState.mode === "simulated" ? "SIMULATED" : "REAL"}
-        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            style={{ padding: "2px 7px", fontSize: "9px" }}
+            onClick={() => setIsExpanded((prev) => !prev)}
+            aria-label={isExpanded ? "Dock camera feed" : "Expand camera feed"}
+          >
+            {isExpanded ? "DOCK VIEW" : "EXPAND"}
+          </button>
+          <span className="badge">
+            {vehicleState.mode === "simulated" ? "SIMULATED" : "REAL"}
+          </span>
+        </div>
       </div>
 
       <div className="panel-body">
@@ -248,7 +263,7 @@ export function CameraFeed(): React.JSX.Element {
               style={{
                 width: "100%",
                 height: "100%",
-                objectFit: "cover",
+                objectFit: "contain",
                 display: "block",
               }}
               onError={() => setStreamError(true)}
@@ -260,7 +275,7 @@ export function CameraFeed(): React.JSX.Element {
               style={{
                 width: "100%",
                 height: "100%",
-                objectFit: "cover",
+                objectFit: "contain",
                 display: "block",
               }}
               onError={() => setStreamError(true)}

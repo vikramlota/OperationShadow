@@ -1,12 +1,10 @@
 from ultron.schemas.mission import VehicleID, MissionStatus, TaskPriority, Task, MissionPlan
 from ultron.schemas.commands import (
     ScoutAction,
-    HawkAction,
     Position2D,
     Position3D,
     CommandPriority,
     ScoutCommand,
-    HawkCommand,
     VehicleCommand,
 )
 from ultron.schemas.observations import (
@@ -26,7 +24,6 @@ from ultron.schemas.world import (
     EnvironmentState,
     EvidenceReference,
     GroundedEnvironmentalResponse,
-    HawkState,
     HazardEntity,
     MissionState,
     ObjectEntity,
@@ -47,12 +44,10 @@ __all__ = [
     "Task",
     "MissionPlan",
     "ScoutAction",
-    "HawkAction",
     "Position2D",
     "Position3D",
     "CommandPriority",
     "ScoutCommand",
-    "HawkCommand",
     "VehicleCommand",
     "EpistemicStatusEnum",
     "LidarObstacleMeasurement",
@@ -68,7 +63,6 @@ __all__ = [
     "EnvironmentState",
     "EvidenceReference",
     "GroundedEnvironmentalResponse",
-    "HawkState",
     "HazardEntity",
     "MissionState",
     "ObjectEntity",

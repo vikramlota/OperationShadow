@@ -13,7 +13,10 @@ import { SimulatedModeToggle } from "./components/SimulatedModeToggle";
 import { VehicleStatusCard } from "./components/VehicleStatusCard";
 import { useDashboardSocket } from "./hooks/useDashboardSocket";
 import { useMissionState } from "./hooks/useMissionState";
-import { useDashboardStore } from "./state/store";
+import {
+  isHeartbeatTimestampStale,
+  useDashboardStore,
+} from "./state/store";
 
 export interface AppProps {
   enableWebSocket?: boolean;
@@ -47,8 +50,8 @@ export default function App({
             type: "SET_BACKEND_HEALTH",
             payload: {
               reachable: false,
-              hardwareLockout: state.hardwareLockout,
-              ultronIsStub: state.ultronIsStub,
+              hardwareLockout: true,
+              ultronIsStub: true,
             },
           });
         }
@@ -56,10 +59,26 @@ export default function App({
     return () => {
       cancelled = true;
     };
-  }, [dispatch, state.hardwareLockout, state.ultronIsStub]);
+  }, [dispatch]);
 
   const scout = state.vehicles.SCOUT01;
   const scoutDet = state.detections.SCOUT01;
+
+  useEffect(() => {
+    if (!scout.lastHeartbeat) {
+      return;
+    }
+    const timer = setInterval(() => {
+      const nowStale = isHeartbeatTimestampStale(scout.lastHeartbeat);
+      if (nowStale !== scout.isStale) {
+        dispatch({
+          type: "SET_VEHICLE_STALE",
+          payload: { vehicleId: "SCOUT01", isStale: nowStale },
+        });
+      }
+    }, 500);
+    return () => clearInterval(timer);
+  }, [scout.lastHeartbeat, scout.isStale, dispatch]);
   const allSimulated = scout.mode === "simulated";
   const hasLiveRosPerception =
     scoutDet.telemetrySource === "rosbridge" ||
@@ -141,11 +160,11 @@ export default function App({
       {/* 3. Center Column: Dominant Tactical Indoor Floor Map */}
       <FloorMap />
 
-      {/* 4. Right Rail: Vehicle Inspector, ROS Perception & Direct Optical Feed */}
+      {/* 4. Right Rail: Direct Optical Feed, Vehicle Inspector & ROS Perception */}
       <aside className="right-rail" aria-label="Vehicle Inspector and Optical Feeds">
+        <CameraFeed />
         <VehicleStatusCard vehicle={scout} />
         <PerceptionPanel vehicleId="SCOUT01" />
-        <CameraFeed />
       </aside>
 
       {/* 5. Bottom Dock: Mission Replay, Event Log & Reasoning Trace */}

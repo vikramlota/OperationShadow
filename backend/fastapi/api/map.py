@@ -8,9 +8,11 @@ lidar_map.pcd, rtabmap.db) from physical robots streaming safely into saved_maps
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 import re
 import shutil
+from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile, status
 from schemas.entities import (
@@ -148,14 +150,17 @@ async def process_map_upload(
             elif base_name.endswith(".db") and "rtabmap.db" not in candidates:
                 candidates["rtabmap.db"] = f
 
+    def _copy_file_sync(src_file: Any, dst_path: Path) -> None:
+        with dst_path.open("wb") as dest:
+            shutil.copyfileobj(src_file, dest)
+
     saved_filenames: list[str] = []
     for filename, upload_file in candidates.items():
         safe_filename = Path(filename).name
         target_path = saved_dir / safe_filename
 
         try:
-            with target_path.open("wb") as dest:
-                shutil.copyfileobj(upload_file.file, dest)
+            await asyncio.to_thread(_copy_file_sync, upload_file.file, target_path)
             saved_filenames.append(safe_filename)
         except Exception as exc:
             raise HTTPException(

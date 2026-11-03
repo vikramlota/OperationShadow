@@ -144,10 +144,10 @@ class Settings(BaseSettings):
                     "when SHADOW_ROS_ENABLED=true; do not assume a default vehicle mapping."
                 )
                 raise ValueError(msg)
-            if self.ros_vehicle_id not in ("SCOUT01", "HAWK01"):
+            if self.ros_vehicle_id != "SCOUT01":
                 msg = (
                     f"Invalid SHADOW_ROS_VEHICLE_ID='{self.ros_vehicle_id}'. "
-                    "Must be an explicitly supported vehicle identifier ('SCOUT01' or 'HAWK01')."
+                    "Must be 'SCOUT01' (the only supported vehicle identifier in this deployment)."
                 )
                 raise ValueError(msg)
             if not self.ros_detections_topic or not self.ros_detections_topic.startswith("/"):

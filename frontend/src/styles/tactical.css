@@ -102,7 +102,7 @@ html, body, #root {
 .app-shell {
   display: grid;
   grid-template-rows: 42px 1fr minmax(180px, 220px);
-  grid-template-columns: 260px 1fr 320px;
+  grid-template-columns: 320px 1fr 380px;
   grid-template-areas:
     "header  header  header"
     "left    map     right"
@@ -410,41 +410,72 @@ html, body, #root {
   min-height: 0;
 }
 
+/* Prevent flex-column rails from vertically squishing stacked panels */
+.left-rail > .panel,
+.right-rail > .panel {
+  flex-shrink: 0;
+  overflow: visible;
+  min-height: auto;
+}
+
+.left-rail > .panel > .panel-body,
+.right-rail > .panel > .panel-body {
+  flex: 0 0 auto;
+  overflow-y: visible;
+  min-height: auto;
+}
+
 .scout-control-panel {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .scout-control-safety {
   color: var(--status-warning);
-  font: 9px var(--font-data);
+  font: 10px var(--font-data);
   line-height: 1.4;
+  padding: 6px 8px;
+  background: var(--sf-base);
+  border: 1px solid var(--border-subtle);
+  border-left: 2px solid var(--status-warning);
+  border-radius: 3px;
 }
 
 .scout-control-status {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.scout-control-pad {
+  background: var(--sf-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  padding: 10px;
   display: flex;
-  justify-content: space-between;
+  flex-direction: column;
+  align-items: center;
   gap: 6px;
-  color: var(--text-primary);
-  font: 10px var(--font-data);
 }
 
 .scout-control-keypad {
   display: grid;
-  grid-template-columns: repeat(3, 34px);
+  grid-template-columns: repeat(3, 44px);
   justify-content: center;
-  gap: 3px;
+  gap: 4px;
 }
 
 .scout-control-keypad .btn {
-  min-width: 34px;
+  min-width: 44px;
+  height: 32px;
   padding: 4px;
   font: 700 11px var(--font-data);
 }
 
 .scout-control-stop {
-  align-self: center;
+  width: 140px;
+  height: 28px;
   padding: 4px 10px;
   font: 700 10px var(--font-data);
   border-color: var(--status-warning);
@@ -698,16 +729,43 @@ html, body, #root {
 /* ====================================================================
    11. CAMERA FEED & HUD RETICLES
    ==================================================================== */
+.camera-panel-expanded {
+  position: fixed;
+  top: 52px;
+  right: 12px;
+  width: min(74vw, 920px);
+  z-index: 50;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.85);
+  border: 1px solid var(--border-focus);
+}
+
 .camera-viewport {
+  width: 100%;
+  min-height: 240px;
+  aspect-ratio: 4 / 3;
+  flex-shrink: 0;
   background: var(--sf-void);
   border: 1px solid var(--border-subtle);
   border-radius: 3px;
-  aspect-ratio: 16/9;
   position: relative;
   overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.camera-panel-expanded .camera-viewport {
+  min-height: 440px;
+  max-height: calc(100vh - 170px);
+  aspect-ratio: 16 / 9;
+}
+
+.camera-viewport img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  background: #050607;
 }
 
 .camera-overlay {

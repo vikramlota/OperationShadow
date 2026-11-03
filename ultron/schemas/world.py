@@ -57,20 +57,6 @@ class ScoutState(BaseModel):
     last_heartbeat_timestamp: Optional[float] = None
 
 
-class HawkState(BaseModel):
-    robot_id: Literal["HAWK01"] = "HAWK01"
-    vehicle_type: Literal["aerial"] = "aerial"
-    mode: VehicleMode = VehicleMode.SIMULATED
-    position: Position3D = Position3D(x=0.0, y=0.0, alt=0.0)
-    pose_valid: bool = True
-    coordinate_frame: str = "map"
-    battery: float = Field(ge=0.0, le=100.0, default=100.0)
-    status: str = "IDLE"
-    connection: ConnectionStatus = ConnectionStatus.ONLINE
-    current_task: Optional[str] = None
-    last_heartbeat_timestamp: Optional[float] = None
-
-
 class HazardEntity(BaseModel):
     id: str
     location: Position2D
@@ -218,7 +204,7 @@ def _default_active_tasks() -> Dict[VehicleID, Optional[str]]:
     return {VehicleID.SCOUT: None}
 
 
-def _default_vehicles() -> Dict[str, Union[ScoutState, HawkState]]:
+def _default_vehicles() -> Dict[str, ScoutState]:
     return {"SCOUT01": ScoutState()}
 
 
@@ -291,7 +277,7 @@ class EnvironmentState(BaseModel):
 
 class WorldModel(BaseModel):
     mission: MissionState
-    vehicles: Dict[str, Union[ScoutState, HawkState]] = Field(
+    vehicles: Dict[str, ScoutState] = Field(
         default_factory=_default_vehicles
     )
     environment: EnvironmentState = Field(default_factory=EnvironmentState)

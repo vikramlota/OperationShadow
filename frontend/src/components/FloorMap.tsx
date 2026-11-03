@@ -154,6 +154,7 @@ export function FloorMap(): React.JSX.Element {
       .then((payload) => {
         if (!cancelled) {
           setMapConfig(payload);
+          dispatch({ type: "SET_FLOOR_PLAN", payload });
         }
       })
       .catch((err) => {
@@ -166,11 +167,15 @@ export function FloorMap(): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [dispatch]);
 
-  // Update SCOUT01 breadcrumbs trail
+  // Update SCOUT01 breadcrumbs trail only when vehicle is actively connected and fresh
   useEffect(() => {
-    const pos = state.vehicles.SCOUT01.position;
+    const scout = state.vehicles.SCOUT01;
+    if (scout.connection !== "CONNECTED" || scout.isStale) {
+      return;
+    }
+    const pos = scout.position;
     setScoutBreadcrumbs((prev) => {
       const last = prev[prev.length - 1];
       if (last && Math.hypot(last.x - pos.x, last.y - pos.y) < 0.2) {
@@ -178,7 +183,11 @@ export function FloorMap(): React.JSX.Element {
       }
       return [...prev.slice(-24), { x: pos.x, y: pos.y }];
     });
-  }, [state.vehicles.SCOUT01.position]);
+  }, [
+    state.vehicles.SCOUT01.position,
+    state.vehicles.SCOUT01.connection,
+    state.vehicles.SCOUT01.isStale,
+  ]);
 
   const activeMap = mapConfig;
   const widthM = activeMap.width_m > 0 ? activeMap.width_m : 20;

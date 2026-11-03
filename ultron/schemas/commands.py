@@ -16,16 +16,6 @@ class ScoutAction(str, Enum):
     REPORT = "REPORT"
 
 
-class HawkAction(str, Enum):
-    TAKEOFF = "TAKEOFF"
-    PATROL = "PATROL"
-    HOVER_SCAN = "HOVER_SCAN"
-    RETURN_HOME = "RETURN_HOME"
-    LAND = "LAND"
-    STOP = "STOP"
-    REPORT = "REPORT"
-
-
 class Position2D(BaseModel):
     x: float
     y: float
@@ -51,13 +41,4 @@ class ScoutCommand(BaseModel):
     priority: CommandPriority = CommandPriority.HIGH
 
 
-class HawkCommand(BaseModel):
-    command_id: str
-    robot_id: Literal["HAWK01"] = "HAWK01"
-    vehicle_type: Literal["aerial"] = "aerial"
-    action: HawkAction
-    target: Optional[Position3D] = None
-    priority: CommandPriority = CommandPriority.HIGH
-
-
-VehicleCommand = Union[ScoutCommand, HawkCommand]
+VehicleCommand = ScoutCommand

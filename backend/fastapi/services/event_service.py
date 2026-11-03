@@ -36,6 +36,8 @@ class EventService:
         message: str,
         event_id: str | None = None,
         timestamp: datetime | None = None,
+        commit: bool = True,
+        broadcast: bool = True,
     ) -> EventRead:
         """Persist an Event row to SQLite and broadcast over the dashboard WebSocket."""
         resolved_id = event_id or f"EVT-{uuid.uuid4().hex[:8].upper()}"
@@ -52,11 +54,21 @@ class EventService:
             message=message,
         )
         session.add(event_row)
-        await session.commit()
-        await session.refresh(event_row)
+        if commit:
+            await session.commit()
+            await session.refresh(event_row)
+        else:
+            await session.flush()
 
-        event_read = EventRead.model_validate(event_row)
-        await self._gateway.broadcast_event(event_read)
+        event_read = EventRead(
+            id=event_row.id,
+            mission_id=event_row.mission_id,
+            timestamp=resolved_ts,
+            category=event_row.category,
+            message=event_row.message,
+        )
+        if broadcast:
+            await self._gateway.broadcast_event(event_read)
         return event_read
 
     async def record_reasoning_trace(
@@ -69,6 +81,8 @@ class EventService:
         resulting_task_ids: list[str],
         trace_id: str | None = None,
         timestamp: datetime | None = None,
+        commit: bool = True,
+        broadcast: bool = True,
     ) -> ReasoningTraceRead:
         """Persist a ReasoningTrace row to SQLite and broadcast over the dashboard WebSocket."""
         resolved_id = trace_id or f"RT-{uuid.uuid4().hex[:8].upper()}"
@@ -83,11 +97,22 @@ class EventService:
             resulting_task_ids=list(resulting_task_ids),
         )
         session.add(trace_row)
-        await session.commit()
-        await session.refresh(trace_row)
+        if commit:
+            await session.commit()
+            await session.refresh(trace_row)
+        else:
+            await session.flush()
 
-        trace_read = ReasoningTraceRead.model_validate(trace_row)
-        await self._gateway.broadcast_reasoning_trace(trace_read)
+        trace_read = ReasoningTraceRead(
+            id=trace_row.id,
+            mission_id=trace_row.mission_id,
+            timestamp=resolved_ts,
+            trigger=trace_row.trigger,
+            rationale=trace_row.rationale,
+            resulting_task_ids=list(trace_row.resulting_task_ids),
+        )
+        if broadcast:
+            await self._gateway.broadcast_reasoning_trace(trace_read)
         return trace_read
 
     async def list_events(

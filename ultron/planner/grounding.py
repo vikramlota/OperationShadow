@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import re
 import time
-from typing import List, Optional, Tuple
+from typing import List, Literal, Optional, Tuple
 
 from ultron.config import config as ultron_config
 from ultron.schemas.mission import MissionPlan
@@ -483,7 +483,7 @@ def answer_environmental_query(
                 )
             )
 
-    conf_level: str = "medium"
+    conf_level: Literal["high", "medium", "low", "unavailable"] = "medium"
     if has_conflict or has_stale:
         conf_level = "low"
     elif all_corroborated and target_list:
@@ -498,7 +498,7 @@ def answer_environmental_query(
             unknowns=list(dict.fromkeys(unknowns)),
             warnings=list(dict.fromkeys(warnings)),
             evidence=evidence,
-            confidence=conf_level,  # type: ignore[arg-type]
+            confidence=conf_level,
         ),
         current_time=now,
     )

@@ -376,28 +376,37 @@ class DepthCameraAdapter:
 
     @staticmethod
     def _unwrap_payload(raw_message: Dict[str, Any] | str) -> Dict[str, Any]:
+        msg_dict: Dict[str, Any]
         if isinstance(raw_message, str):
             parsed = json.loads(raw_message)
             if not isinstance(parsed, dict):
                 raise ValueError("JSON root must be an object.")
-            raw_message = parsed
-
-        if not isinstance(raw_message, dict):
+            msg_dict = parsed
+        elif isinstance(raw_message, dict):
+            msg_dict = raw_message
+        else:
             raise ValueError("Message must be a dict or JSON string.")
 
-        if raw_message.get("op") == "publish" and isinstance(raw_message.get("msg"), dict):
-            raw_message = raw_message["msg"]
+        if msg_dict.get("op") == "publish" and isinstance(msg_dict.get("msg"), dict):
+            msg_dict = msg_dict["msg"]
 
-        if "data" in raw_message and "stamp" not in raw_message:
-            data_str = raw_message["data"]
+        if "data" in msg_dict and "stamp" not in msg_dict:
+            data_str = msg_dict["data"]
             if not isinstance(data_str, str):
                 raise ValueError("std_msgs/String 'data' field must be a string.")
             inner = json.loads(data_str)
             if not isinstance(inner, dict):
                 raise ValueError("Inner JSON payload must be an object.")
+            if inner.get("op") == "publish" and isinstance(inner.get("msg"), dict):
+                inner_msg = inner["msg"]
+                if "data" in inner_msg and isinstance(inner_msg["data"], str):
+                    inner2 = json.loads(inner_msg["data"])
+                    if not isinstance(inner2, dict):
+                        raise ValueError("Inner JSON payload must be an object.")
+                    return inner2
             return inner
 
-        return raw_message
+        return msg_dict
 
 
 class VisionPipeline:

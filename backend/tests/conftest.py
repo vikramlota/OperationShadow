@@ -1,8 +1,8 @@
-"""Pytest fixtures providing isolated temporary SQLite databases per test."""
+"""Pytest fixtures providing isolated temporary SQLite databases and clean safety latches per test."""
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
 from db.session import (
@@ -11,11 +11,20 @@ from db.session import (
     init_db,
 )
 import pytest
+from services.scout_serial_writer import reset_global_emergency_stop
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_estop_latch_between_tests() -> Iterator[None]:
+    """Ensure the process-wide Emergency Stop latch starts and ends clean for each test."""
+    reset_global_emergency_stop(authorized=True)
+    yield
+    reset_global_emergency_stop(authorized=True)
 
 
 @pytest.fixture

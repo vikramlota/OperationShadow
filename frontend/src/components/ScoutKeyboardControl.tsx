@@ -249,75 +249,87 @@ export function ScoutKeyboardControl(): React.JSX.Element {
             : "SIMULATION ONLY // ESP32 TRANSMITTER OFFLINE // NO MOTOR OUTPUT"}
         </div>
         <div className="scout-control-status">
-          <span>CURRENT: {currentCommand}</span>
-          <span>TRANSMITTER: {transmitterConnected ? "CONNECTED" : "NOT CONNECTED"}</span>
+          <div className="data-cell">
+            <div className="data-label">COMMAND</div>
+            <div className="data-value data-value-accent">
+              CURRENT: {currentCommand}
+            </div>
+          </div>
+          <div className="data-cell">
+            <div className="data-label">TRANSMITTER</div>
+            <div className="data-value" style={{ fontSize: "11px" }}>
+              {transmitterConnected ? "CONNECTED" : "NOT CONNECTED"}
+            </div>
+          </div>
         </div>
-        <div
-          className="scout-control-keypad"
-          aria-label={serialMode ? "SCOUT01 movement controls" : "Simulated movement controls"}
-        >
-          <span />
-          {(["W"] as const).map((command) => (
-            <button
-              key={command}
-              type="button"
-              className="btn btn-secondary"
-              disabled={
-                linkState !== "CONNECTED" || (serialMode && !physicalControlAvailable)
-              }
-              onPointerDown={(event) => {
-                event.preventDefault();
-                beginMovement(command);
-              }}
-              onPointerUp={releaseMovement}
-              onPointerCancel={releaseMovement}
-              onPointerLeave={(event) => {
-                if (event.buttons !== 0) releaseMovement();
-              }}
-              aria-label={`${serialMode ? "Send" : "Simulate"} ${command} forward`}
-            >
-              W
-            </button>
-          ))}
-          <span />
-          {(["A", "S", "D"] as const).map((command) => (
-            <button
-              key={command}
-              type="button"
-              className="btn btn-secondary"
-              disabled={
-                linkState !== "CONNECTED" || (serialMode && !physicalControlAvailable)
-              }
-              onPointerDown={(event) => {
-                event.preventDefault();
-                beginMovement(command);
-              }}
-              onPointerUp={releaseMovement}
-              onPointerCancel={releaseMovement}
-              onPointerLeave={(event) => {
-                if (event.buttons !== 0) releaseMovement();
-              }}
-              aria-label={`${serialMode ? "Send" : "Simulate"} ${command}`}
-            >
-              {command}
-            </button>
-          ))}
+        <div className="scout-control-pad">
+          <div
+            className="scout-control-keypad"
+            aria-label={serialMode ? "SCOUT01 movement controls" : "Simulated movement controls"}
+          >
+            <span />
+            {(["W"] as const).map((command) => (
+              <button
+                key={command}
+                type="button"
+                className="btn btn-secondary"
+                disabled={
+                  linkState !== "CONNECTED" || (serialMode && !physicalControlAvailable)
+                }
+                onPointerDown={(event) => {
+                  event.preventDefault();
+                  beginMovement(command);
+                }}
+                onPointerUp={releaseMovement}
+                onPointerCancel={releaseMovement}
+                onPointerLeave={(event) => {
+                  if (event.buttons !== 0) releaseMovement();
+                }}
+                aria-label={`${serialMode ? "Send" : "Simulate"} ${command} forward`}
+              >
+                W
+              </button>
+            ))}
+            <span />
+            {(["A", "S", "D"] as const).map((command) => (
+              <button
+                key={command}
+                type="button"
+                className="btn btn-secondary"
+                disabled={
+                  linkState !== "CONNECTED" || (serialMode && !physicalControlAvailable)
+                }
+                onPointerDown={(event) => {
+                  event.preventDefault();
+                  beginMovement(command);
+                }}
+                onPointerUp={releaseMovement}
+                onPointerCancel={releaseMovement}
+                onPointerLeave={(event) => {
+                  if (event.buttons !== 0) releaseMovement();
+                }}
+                aria-label={`${serialMode ? "Send" : "Simulate"} ${command}`}
+              >
+                {command}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            className="btn btn-secondary scout-control-stop"
+            disabled={linkState !== "CONNECTED"}
+            onClick={releaseMovement}
+            aria-label={serialMode ? "Send X stop" : "Send simulated X stop"}
+          >
+            X // SIM STOP
+          </button>
         </div>
-        <button
-          type="button"
-          className="btn btn-secondary scout-control-stop"
-          disabled={linkState !== "CONNECTED"}
-          onClick={releaseMovement}
-          aria-label={serialMode ? "Send X stop" : "Send simulated X stop"}
-        >
-          X // SIM STOP
-        </button>
         {controlError && (
           <div className="c2-alert-box c2-alert-warn" role="alert">
             {controlError}
           </div>
         )}
-        <span className="panel-meta">
+        <span className="panel-meta" style={{ textAlign: "center" }}>
           HOLD W/A/S/D // RELEASE OR X TO STOP // {KEEPALIVE_RATE_HZ} HZ SIM LEASE
         </span>
       </div>

@@ -118,17 +118,25 @@ def check_replanning_triggers(
                         f"(observations: {', '.join(tobj.contributing_observation_ids)}). Initiating target response sequence."
                     )
 
-    for obj in world.environment.objects:
-        if not getattr(obj, "handled", False) and (
-            obj.label == world.mission.objective or obj.label == "red_package"
+    for legacy_obj in world.environment.objects:
+        if (
+            not getattr(legacy_obj, "handled", False)
+            and legacy_obj.epistemic_status != EpistemicStatusEnum.STALE
+            and (
+                legacy_obj.label == world.mission.objective
+                or legacy_obj.label == "red_package"
+            )
         ):
-            source_id = getattr(obj.source_vehicle, "value", str(obj.source_vehicle))
-            sig = f"target_legacy:{obj.id}"
+            source_id = getattr(
+                legacy_obj.source_vehicle, "value", str(legacy_obj.source_vehicle)
+            )
+            sig = f"target_legacy:{legacy_obj.id}"
             if not _should_debounce(world, sig, now, effective_debounce):
                 _record_trigger(world, sig, now)
                 return True, (
-                    f"Target '{obj.label}' located by {source_id} "
-                    f"at ({obj.location.x}, {obj.location.y}). Initiating mission completion sequence."
+                    f"Target '{legacy_obj.label}' located by {source_id} "
+                    f"at ({legacy_obj.location.x}, {legacy_obj.location.y}) in '{legacy_obj.coordinate_frame}'. "
+                    "Initiating mission completion sequence."
                 )
 
     # 4. Newly Detected Obstacle Intersecting Route / Path Blocked

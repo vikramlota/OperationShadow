@@ -59,48 +59,84 @@ export function SimulatedModeToggle(): React.JSX.Element {
   return (
     <section className="panel" aria-label="Simulated Mode Status">
       <div className="panel-header">
-        <h2 className="panel-title">OPERATING MODE &amp; SAFETY LOCKOUT</h2>
+        <h2 className="panel-title">OPERATING MODE &amp; LOCKOUT</h2>
         <span
           className={`badge ${
             state.hardwareLockout ? "badge-warning" : "badge-critical"
           }`}
-          style={{ fontSize: "10px", padding: "1px 6px" }}
+          style={{ fontSize: "9px", padding: "1px 6px" }}
         >
-          Hardware Lockout:{" "}
-          {state.hardwareLockout ? "ACTIVE (Simulated Only)" : "INACTIVE"}
+          {state.hardwareLockout ? "LOCKED" : "UNLOCKED"}
         </span>
       </div>
 
       <div className="panel-body">
         <div
+          className="data-cell"
           style={{
-            fontSize: "11px",
-            color: "var(--text-secondary)",
-            fontFamily: "var(--font-data)",
-            lineHeight: 1.4,
+            display: "flex",
+            flexDirection: "column",
+            gap: "4px",
+            borderLeft: state.hardwareLockout
+              ? "2px solid var(--status-warning)"
+              : "2px solid var(--status-critical)",
           }}
         >
-          Physical hardware control is locked until TRD v2.0 &amp; Hardware/IoT
-          failsafes are verified.
+          <div
+            style={{
+              fontFamily: "var(--font-data)",
+              fontSize: "10px",
+              fontWeight: 600,
+              color: state.hardwareLockout ? "#D8A850" : "#E86060",
+            }}
+          >
+            Hardware Lockout:{" "}
+            {state.hardwareLockout ? "ACTIVE (Simulated Only)" : "INACTIVE"}
+          </div>
+          <div
+            style={{
+              fontSize: "10px",
+              color: "var(--text-secondary)",
+              fontFamily: "var(--font-data)",
+              lineHeight: 1.4,
+            }}
+          >
+            Physical hardware control is locked until TRD v2.0 &amp; Hardware/IoT
+            failsafes are verified.
+          </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: "8px",
+            padding: "6px 8px",
+            background: "var(--sf-base)",
+            borderRadius: "3px",
+            border: "1px solid var(--border-subtle)",
+          }}
+        >
+          <span className="panel-meta" role="status">
+            {scoutStatus
+              ? `BACKEND ROS: ${scoutStatus.mode.toUpperCase()} // ${
+                  scoutStatus.connected ? "LINKED" : "NOT LINKED"
+                }`
+              : "ROS LINK STATUS: UNQUERIED"}
+          </span>
           <button
             type="button"
             className="btn btn-secondary"
-            style={{ padding: "3px 8px", fontSize: "10px" }}
+            style={{ padding: "4px 8px", fontSize: "10px", whiteSpace: "nowrap" }}
             disabled={isSyncingScout}
             onClick={() => void handleSyncScoutStatus()}
             aria-label="Sync SCOUT01 ROS status"
           >
             {isSyncingScout ? "SYNC..." : "SYNC ROS STATUS"}
           </button>
-          {scoutStatus && (
-            <span className="panel-meta" role="status">
-              BACKEND ROS: {scoutStatus.mode.toUpperCase()} //
-              {scoutStatus.connected ? " LINKED" : " NOT LINKED"}
-            </span>
-          )}
         </div>
+
         {scoutError && (
           <div className="c2-alert-box c2-alert-error" role="alert">
             {scoutError}
@@ -115,29 +151,55 @@ export function SimulatedModeToggle(): React.JSX.Element {
               key={vid}
               style={{
                 display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                padding: "6px 8px",
+                flexDirection: "column",
+                gap: "8px",
+                padding: "8px",
                 background: "var(--sf-base)",
                 borderRadius: "3px",
                 border: "1px solid var(--border-subtle)",
               }}
             >
-              <div>
-                <div style={{ fontFamily: "var(--font-data)", fontWeight: 600, fontSize: "11px" }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: "6px",
+                }}
+              >
+                <span
+                  style={{
+                    fontFamily: "var(--font-data)",
+                    fontWeight: 600,
+                    fontSize: "11px",
+                    color: "var(--text-primary)",
+                  }}
+                >
                   {vid}: {v.mode.toUpperCase()}
-                </div>
-                <div style={{ fontFamily: "var(--font-ui)", fontSize: "9px", color: "var(--text-muted)" }}>
-                  BACKEND CONFIRMED MODE: {v.mode.toUpperCase()}
-                </div>
+                </span>
+                <span
+                  style={{
+                    fontFamily: "var(--font-data)",
+                    fontSize: "9px",
+                    color: "var(--text-muted)",
+                  }}
+                >
+                  CONFIRMED: {v.mode.toUpperCase()}
+                </span>
               </div>
-              <div style={{ display: "flex", gap: "4px" }}>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: "6px",
+                }}
+              >
                 <button
                   type="button"
                   className={`btn ${
                     v.mode === "simulated" ? "btn-primary" : "btn-secondary"
                   }`}
-                  style={{ padding: "3px 8px", fontSize: "10px" }}
+                  style={{ padding: "5px 8px", fontSize: "10px", width: "100%" }}
                   disabled={isBusy}
                   onClick={() => void handleEnableSimulatedMode(vid)}
                   aria-label={`Set ${vid} to Simulated Mode`}
@@ -149,7 +211,7 @@ export function SimulatedModeToggle(): React.JSX.Element {
                   className={`btn ${
                     v.mode === "real" ? "btn-primary" : "btn-secondary"
                   }`}
-                  style={{ padding: "3px 8px", fontSize: "10px" }}
+                  style={{ padding: "5px 8px", fontSize: "10px", width: "100%" }}
                   disabled
                   title="Real hardware mode is unavailable until external specifications and failsafes are verified."
                   aria-label={`Attempt Real Hardware Mode for ${vid}`}

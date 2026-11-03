@@ -40,5 +40,5 @@ explicit_package_bases = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["roslibpy", "roslibpy.*"]
+module = ["roslibpy", "roslibpy.*", "langgraph", "langgraph.*", "google", "google.*", "elevenlabs", "elevenlabs.*"]
 ignore_missing_imports = true

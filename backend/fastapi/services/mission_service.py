@@ -52,43 +52,64 @@ def _task_serial_steps(
     upper_type = (task_type or "").upper()
     lower_target = (target or "").lower()
 
-    if total_tasks == 1 and (
-        "RECON" in upper_type
+    # Extended realistic scanning and multi-phase reconnaissance sequence (~22-25 seconds)
+    if "DEEP" in upper_type or "corridor" in lower_target or "lobby" in lower_target:
+        return [
+            ("W", 3.0, "NAVIGATE forward down corridor (2.0m)"),
+            ("A", 1.8, "SCAN 90° sweep toward perimeter seating"),
+            ("X", 1.5, "DWELL hold for optical depth point cloud"),
+            ("D", 2.6, "SCAN pan toward central partition obstacle"),
+            ("X", 1.5, "DWELL hold for barrier boundary logging"),
+            ("A", 1.2, "ALIGN heading with corridor center"),
+            ("W", 3.0, "PROBE advance past partition"),
+            ("A", 2.8, "PANORAMA 360° visual inspection"),
+            ("W", 3.5, "RETURN traverse back to base station"),
+            ("A", 1.8, "ORIENT re-align to base heading"),
+            ("X", 0.0, "DIAGNOSTICS hold & all clear"),
+        ]
+
+    # Standard full 5-stage reconnaissance loop (~9-10 seconds)
+    if (
+        total_tasks == 1
+        or "RECON" in upper_type
         or "return" in lower_target
         or "sweep" in lower_target
         or "scan" in lower_target
     ):
         return [
-            ("W", 2.0, "NAVIGATE forward (1.5m)"),
-            ("A", 1.6, "ROTATE 180-degree scan"),
-            ("W", 2.0, "RETURN to start position"),
-            ("A", 1.6, "ORIENT to original heading"),
+            ("W", 2.5, "NAVIGATE forward down aisle (2.0m)"),
+            ("A", 2.2, "SCAN 180° visual sweep of perimeter"),
+            ("X", 1.0, "DWELL hold for object detection"),
+            ("W", 2.5, "RETURN traverse back to start position"),
+            ("A", 1.8, "ORIENT re-align to original heading"),
             ("X", 0.0, "DIAGNOSTICS / STOP"),
         ]
 
     if "RETURN" in upper_type or "return" in lower_target or "base" in lower_target:
         return [
-            ("A", 1.6, "ROTATE 180 degrees toward base"),
-            ("W", 2.0, "RETURN to base position"),
+            ("A", 1.8, "ROTATE 180 degrees toward base"),
+            ("W", 2.5, "RETURN to base position"),
             ("A", 1.6, "ORIENT to original heading"),
         ]
     if upper_type in ("SCAN", "INSPECT") or "scan" in lower_target or "360" in lower_target:
         return [
-            ("A", 1.6, f"{upper_type} rotational sweep"),
+            ("A", 2.4, f"{upper_type} rotational sweep"),
+            ("X", 1.5, "DWELL capture optical frame"),
+            ("D", 1.2, "COUNTER-SCAN re-center heading"),
         ]
     if upper_type == "AVOID" or "avoid" in lower_target or "reroute" in lower_target:
         return [
-            ("A", 0.8, "AVOID obstacle turn left"),
-            ("W", 1.2, "AVOID bypass forward"),
-            ("D", 0.8, "AVOID re-align heading"),
+            ("A", 1.0, "AVOID obstacle turn left"),
+            ("W", 1.6, "AVOID bypass forward"),
+            ("D", 1.0, "AVOID re-align heading"),
         ]
     if upper_type in ("STOP", "REPORT") or "stop" in lower_target or "confirm" in lower_target:
         return [
             ("X", 0.0, f"{upper_type} confirm systems & hold"),
         ]
-    # Default for NAVIGATE / EXPLORE / movement tasks
+    # Default for movement tasks
     return [
-        ("W", 2.0, f"{upper_type or 'NAVIGATE'} forward (1.5m)"),
+        ("W", 2.5, f"{upper_type or 'NAVIGATE'} forward"),
     ]
 
 
@@ -131,7 +152,7 @@ class MissionService:
         count_result = await session.execute(select(func.count()).select_from(Mission))
         count = int(count_result.scalar_one() or 0)
         candidate_num = count + 1
-        while True:
+        for _ in range(10_000):
             candidate = f"M{candidate_num:03d}"
             exists = (
                 await session.execute(select(Mission.id).where(Mission.id == candidate))
@@ -139,6 +160,7 @@ class MissionService:
             if exists is None:
                 return candidate
             candidate_num += 1
+        return f"M{candidate_num:03d}"
 
     async def create_mission(
         self,
@@ -188,18 +210,18 @@ class MissionService:
             session.add(t_row)
             task_rows.append(t_row)
 
-        await session.commit()
-
-        # Persist and broadcast initial mission event and reasoning trace
-        await self._events.record_event(
+        # Persist mission, tasks, initial event, and reasoning trace in a single atomic commit
+        event_read = await self._events.record_event(
             session,
             mission_id=mission_id,
             category=EventCategoryEnum.MISSION,
             message=f"Mission {mission_id} created: {request.objective}",
             event_id=f"{mission_id}-EVT01",
             timestamp=now,
+            commit=False,
+            broadcast=False,
         )
-        await self._events.record_reasoning_trace(
+        trace_read = await self._events.record_reasoning_trace(
             session,
             mission_id=mission_id,
             trigger=plan.trigger,
@@ -207,12 +229,125 @@ class MissionService:
             resulting_task_ids=[t.id for t in task_rows],
             trace_id=f"{mission_id}-RT01",
             timestamp=now + timedelta(milliseconds=1),
+            commit=False,
+            broadcast=False,
         )
 
-        detail = await self.get_mission(session, mission_id)
+        await session.commit()
+
+        sorted_tasks = sorted(task_rows, key=lambda t: (t.priority, t.id))
+        detail = MissionDetailRead(
+            id=mission_row.id,
+            objective=mission_row.objective,
+            status=MissionStatusEnum(mission_row.status),
+            created_at=mission_row.created_at,
+            completed_at=mission_row.completed_at,
+            tasks=[TaskRead.model_validate(t) for t in sorted_tasks],
+        )
+        await self._gateway.broadcast_event(event_read)
+        await self._gateway.broadcast_reasoning_trace(trace_read)
         await self._gateway.broadcast_mission_status(detail)
 
         return MissionCreateResponse(mission_id=mission_id), plan.rationale
+
+    async def _is_emergency_stopped(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> bool:
+        """Check whether SCOUT01 is currently in a latched or DB/WorldModel EMERGENCY_STOPPED state."""
+        from services.scout_serial_writer import (
+            is_global_emergency_stop_latched,
+            latch_global_emergency_stop,
+        )
+
+        if is_global_emergency_stop_latched():
+            return True
+        if hasattr(self._agent, "world"):
+            scout = self._agent.world.vehicles.get("SCOUT01")
+            if scout is not None and getattr(scout, "status", "") == "EMERGENCY_STOPPED":
+                latch_global_emergency_stop()
+                return True
+        async with session_factory() as session:
+            v_row = await session.get(Vehicle, "SCOUT01")
+            if v_row is not None and v_row.status == "EMERGENCY_STOPPED":
+                latch_global_emergency_stop()
+                return True
+        return False
+
+    async def _validate_scout_execution_safety(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> tuple[bool, str]:
+        """Independently check SCOUT01 safety state before dispatching movement commands."""
+        if await self._is_emergency_stopped(session_factory):
+            return False, "SCOUT01 is EMERGENCY_STOPPED (latched)."
+
+        if hasattr(self._agent, "world"):
+            scout = self._agent.world.vehicles.get("SCOUT01")
+            if scout is None:
+                return False, "SCOUT01 is missing from the ULTRON World Model."
+            conn_str = getattr(
+                scout.connection, "value", str(scout.connection)
+            ).strip().upper()
+            if conn_str in {"OFFLINE", "UNKNOWN"}:
+                return False, f"SCOUT01 World Model connection is {conn_str}."
+            bat = getattr(scout, "battery", None)
+            if (
+                bat is None
+                or isinstance(bat, bool)
+                or not isinstance(bat, (int, float))
+                or not math.isfinite(float(bat))
+                or float(bat) <= 20.0
+            ):
+                return False, f"SCOUT01 battery is unsafe or unavailable ({bat!r})."
+
+        async with session_factory() as session:
+            v_row = await session.get(Vehicle, "SCOUT01")
+            if v_row is not None:
+                if v_row.status in {"EMERGENCY_STOPPED", "FAULT", "UNKNOWN"}:
+                    return False, f"SCOUT01 database status is {v_row.status}."
+                if v_row.connection == "UNKNOWN":
+                    return False, "SCOUT01 database connection is UNKNOWN."
+                if (
+                    v_row.battery is None
+                    or not math.isfinite(float(v_row.battery))
+                    or float(v_row.battery) <= 20.0
+                ):
+                    return False, f"SCOUT01 database battery is {v_row.battery}% (<= 20%)."
+
+        return True, "ok"
+
+    async def _send_stop_and_report_fault_if_failed(
+        self,
+        writer: ScoutSerialWriter,
+        session_factory: async_sessionmaker[AsyncSession],
+        mission_id: str,
+        *,
+        context: str,
+    ) -> bool:
+        """Send 'X' (stop) to SCOUT01 and record a CRITICAL SAFETY fault if transmission fails."""
+        if not writer.armed:
+            return True
+        try:
+            await writer.send_verified_stop()
+            return True
+        except Exception as exc:
+            fault_msg = (
+                f"CRITICAL STOP FAULT during {context} on mission {mission_id}: "
+                f"failed to transmit 'X' to SCOUT01 on {writer.port} ({exc})"
+            )
+            logger.critical(fault_msg)
+            async with session_factory() as session:
+                v_row = await session.get(Vehicle, "SCOUT01")
+                if v_row is not None and v_row.status != "EMERGENCY_STOPPED":
+                    v_row.status = "FAULT"
+                await self._events.record_event(
+                    session,
+                    mission_id=mission_id,
+                    category=EventCategoryEnum.SAFETY,
+                    message=fault_msg,
+                )
+            return False
 
     async def _broadcast_scout_pose(
         self,
@@ -223,9 +358,24 @@ class MissionService:
         is_real: bool = True,
     ) -> None:
         """Broadcast live SCOUT01 position to WebSocket clients and sync to SQLite/WorldModel."""
+        if await self._is_emergency_stopped(session_factory):
+            return
+
         now = datetime.now(timezone.utc)
         clean_x = round(max(0.5, min(19.5, x)), 2)
         clean_y = round(max(0.5, min(14.5, y)), 2)
+
+        async with session_factory() as session:
+            v_row = await session.get(Vehicle, "SCOUT01")
+            if v_row is not None:
+                if v_row.status == "EMERGENCY_STOPPED":
+                    return
+                v_row.position_x = clean_x
+                v_row.position_y = clean_y
+                v_row.status = status
+                v_row.connection = "CONNECTED"
+                v_row.last_heartbeat = now
+                await session.commit()
 
         await self._gateway.broadcast_vehicle_dict(
             {
@@ -240,16 +390,6 @@ class MissionService:
                 "last_heartbeat": now,
             }
         )
-
-        async with session_factory() as session:
-            v_row = await session.get(Vehicle, "SCOUT01")
-            if v_row is not None:
-                v_row.position_x = clean_x
-                v_row.position_y = clean_y
-                v_row.status = status
-                v_row.connection = "CONNECTED"
-                v_row.last_heartbeat = now
-                await session.commit()
 
         if hasattr(self._agent, "update_vehicle_state"):
             await self._agent.update_vehicle_state(
@@ -268,17 +408,25 @@ class MissionService:
         serial_writer: ScoutSerialWriter | None = None,
     ) -> MissionDetailRead:
         """Execute a mission's planned tasks on SCOUT01 via ESP32 serial and dead-reckon position on the map."""
+        from services.scout_serial_writer import wait_unless_emergency_stopped
+
         async with self._execution_lock:
             writer = serial_writer or ScoutSerialWriter(
                 port=settings.scout_serial_port,
                 baudrate=settings.scout_serial_baudrate,
-                enabled=True,
-                hardware_lockout=False,
-                real_mode=True,
-                failsafe_verified=True,
+                enabled=settings.scout_serial_enabled,
+                hardware_lockout=settings.hardware_lockout,
+                real_mode=(settings.default_vehicle_mode == "real"),
+                failsafe_verified=settings.scout_serial_failsafe_verified,
             )
             owns_writer = serial_writer is None
-            if not writer.armed and not settings.hardware_lockout:
+            if (
+                not writer.armed
+                and not settings.hardware_lockout
+                and settings.scout_serial_enabled
+                and settings.default_vehicle_mode == "real"
+                and settings.scout_serial_failsafe_verified
+            ):
                 writer.armed = True
 
             hardware_connected = await writer.ensure_connected()
@@ -308,13 +456,27 @@ class MissionService:
                     message=f"Starting SCOUT01 execution for {mission_id} via {mode_label} ({total_tasks} tasks).",
                 )
 
+            safe_ok, safe_reason = await self._validate_scout_execution_safety(
+                session_factory
+            )
+            if not safe_ok:
+                logger.warning(
+                    f"Aborting execute_mission_on_rover for {mission_id}: {safe_reason}"
+                )
+                async with session_factory() as session:
+                    await self._events.record_event(
+                        session,
+                        mission_id=mission_id,
+                        category=EventCategoryEnum.SAFETY,
+                        message=f"Execution blocked by SCOUT01 safety check: {safe_reason}",
+                    )
+                    return await self.get_mission(session, mission_id)
+
             # Dead-reckoning map tracking: start SCOUT01 at Base Station WP_BASE (1.5, 1.5)
-            # heading is initially 0.0 rad (facing East, +x along Sector Alpha corridor)
             curr_x = 1.5
             curr_y = 1.5
             curr_heading = 0.0
 
-            # Broadcast initial Base Station placement immediately
             await self._broadcast_scout_pose(
                 session_factory,
                 curr_x,
@@ -325,6 +487,20 @@ class MissionService:
 
             try:
                 for idx, task_obj in enumerate(sorted_tasks, start=1):
+                    safe_ok, safe_reason = await self._validate_scout_execution_safety(
+                        session_factory
+                    )
+                    if not safe_ok:
+                        if hardware_connected or writer.armed:
+                            await self._send_stop_and_report_fault_if_failed(
+                                writer,
+                                session_factory,
+                                mission_id,
+                                context=f"pre-task abort ({safe_reason})",
+                            )
+                        async with session_factory() as session:
+                            return await self.get_mission(session, mission_id)
+
                     task_id = task_obj.id
                     task_type = task_obj.type
                     task_target = task_obj.target
@@ -340,6 +516,26 @@ class MissionService:
 
                     steps = _task_serial_steps(task_type, task_target, total_tasks)
                     for cmd, duration_s, step_desc in steps:
+                        safe_ok, safe_reason = await self._validate_scout_execution_safety(
+                            session_factory
+                        )
+                        if not safe_ok:
+                            if hardware_connected or writer.armed:
+                                await self._send_stop_and_report_fault_if_failed(
+                                    writer,
+                                    session_factory,
+                                    mission_id,
+                                    context=f"pre-step abort on {task_id} ({safe_reason})",
+                                )
+                            async with session_factory() as session:
+                                t_row = await session.get(Task, task_id)
+                                if t_row is not None and t_row.status == "IN_PROGRESS":
+                                    t_row.status = "CANCELLED"
+                                    await session.commit()
+                                detail = await self.get_mission(session, mission_id)
+                                await self._gateway.broadcast_mission_status(detail)
+                                return detail
+
                         async with session_factory() as session:
                             await self._events.record_event(
                                 session,
@@ -350,18 +546,60 @@ class MissionService:
 
                         # Advance rover position & transmit serial
                         if cmd == "W":
-                            # Move forward 1.5 meters along current heading over duration_s
                             num_ticks = max(1, int(round(duration_s / 0.4)))
                             step_dist = 1.5 / num_ticks
                             tick_dt = duration_s / num_ticks
 
+                            # Final safety/E-Stop check immediately before serial write
+                            if await self._is_emergency_stopped(session_factory):
+                                await self._send_stop_and_report_fault_if_failed(
+                                    writer,
+                                    session_factory,
+                                    mission_id,
+                                    context=f"immediate pre-write E-Stop on {task_id}",
+                                )
+                                async with session_factory() as session:
+                                    t_row = await session.get(Task, task_id)
+                                    if t_row is not None and t_row.status == "IN_PROGRESS":
+                                        t_row.status = "CANCELLED"
+                                        await session.commit()
+                                    detail = await self.get_mission(session, mission_id)
+                                    await self._gateway.broadcast_mission_status(detail)
+                                    return detail
+
                             if hardware_connected:
                                 try:
                                     await writer.send("W")
-                                except Exception:
-                                    pass
+                                except Exception as send_exc:
+                                    logger.error(
+                                        f"Serial write error sending 'W' on {writer.port}: {send_exc}"
+                                    )
+                                    await self._send_stop_and_report_fault_if_failed(
+                                        writer,
+                                        session_factory,
+                                        mission_id,
+                                        context=f"serial write failure during 'W' on {task_id}",
+                                    )
+                                    hardware_connected = False
 
                             for _ in range(num_ticks):
+                                if await self._is_emergency_stopped(session_factory):
+                                    if hardware_connected or writer.armed:
+                                        await self._send_stop_and_report_fault_if_failed(
+                                            writer,
+                                            session_factory,
+                                            mission_id,
+                                            context=f"mid-tick E-Stop on {task_id}",
+                                        )
+                                    async with session_factory() as session:
+                                        t_row = await session.get(Task, task_id)
+                                        if t_row is not None and t_row.status == "IN_PROGRESS":
+                                            t_row.status = "CANCELLED"
+                                            await session.commit()
+                                        detail = await self.get_mission(session, mission_id)
+                                        await self._gateway.broadcast_mission_status(detail)
+                                        return detail
+
                                 curr_x += step_dist * math.cos(curr_heading)
                                 curr_y += step_dist * math.sin(curr_heading)
                                 await self._broadcast_scout_pose(
@@ -371,20 +609,61 @@ class MissionService:
                                     status="EXECUTING",
                                     is_real=hardware_connected,
                                 )
-                                await asyncio.sleep(tick_dt)
+                                completed_tick = await wait_unless_emergency_stopped(tick_dt)
+                                if not completed_tick or await self._is_emergency_stopped(
+                                    session_factory
+                                ):
+                                    if hardware_connected or writer.armed:
+                                        await self._send_stop_and_report_fault_if_failed(
+                                            writer,
+                                            session_factory,
+                                            mission_id,
+                                            context=f"interrupted tick sleep E-Stop on {task_id}",
+                                        )
+                                    async with session_factory() as session:
+                                        t_row = await session.get(Task, task_id)
+                                        if t_row is not None and t_row.status == "IN_PROGRESS":
+                                            t_row.status = "CANCELLED"
+                                            await session.commit()
+                                        detail = await self.get_mission(session, mission_id)
+                                        await self._gateway.broadcast_mission_status(detail)
+                                        return detail
 
-                            if hardware_connected:
-                                try:
-                                    await writer.send("X")
-                                except Exception:
-                                    pass
-                            await asyncio.sleep(0.3)
+                            if hardware_connected or writer.armed:
+                                await self._send_stop_and_report_fault_if_failed(
+                                    writer,
+                                    session_factory,
+                                    mission_id,
+                                    context=f"end of forward step on {task_id}",
+                                )
+                            if not await wait_unless_emergency_stopped(0.3):
+                                if hardware_connected or writer.armed:
+                                    await self._send_stop_and_report_fault_if_failed(
+                                        writer,
+                                        session_factory,
+                                        mission_id,
+                                        context=f"post-step pause E-Stop on {task_id}",
+                                    )
+                                async with session_factory() as session:
+                                    t_row = await session.get(Task, task_id)
+                                    if t_row is not None and t_row.status == "IN_PROGRESS":
+                                        t_row.status = "CANCELLED"
+                                        await session.commit()
+                                    detail = await self.get_mission(session, mission_id)
+                                    await self._gateway.broadcast_mission_status(detail)
+                                    return detail
 
                         elif cmd == "A":
-                            # Turn counterclockwise by 180° (or 90° for short turns)
                             turn_angle = math.pi if duration_s >= 1.5 else (math.pi / 2.0)
                             curr_heading = (curr_heading + turn_angle) % (2.0 * math.pi)
                             await writer.execute_step("A", duration_s, pause_s=0.3)
+                            if await self._is_emergency_stopped(session_factory):
+                                async with session_factory() as session:
+                                    t_row = await session.get(Task, task_id)
+                                    if t_row is not None and t_row.status == "IN_PROGRESS":
+                                        t_row.status = "CANCELLED"
+                                        await session.commit()
+                                    return await self.get_mission(session, mission_id)
                             await self._broadcast_scout_pose(
                                 session_factory,
                                 curr_x,
@@ -394,10 +673,16 @@ class MissionService:
                             )
 
                         elif cmd == "D":
-                            # Turn clockwise
                             turn_angle = math.pi if duration_s >= 1.5 else (math.pi / 2.0)
                             curr_heading = (curr_heading - turn_angle) % (2.0 * math.pi)
                             await writer.execute_step("D", duration_s, pause_s=0.3)
+                            if await self._is_emergency_stopped(session_factory):
+                                async with session_factory() as session:
+                                    t_row = await session.get(Task, task_id)
+                                    if t_row is not None and t_row.status == "IN_PROGRESS":
+                                        t_row.status = "CANCELLED"
+                                        await session.commit()
+                                    return await self.get_mission(session, mission_id)
                             await self._broadcast_scout_pose(
                                 session_factory,
                                 curr_x,
@@ -407,8 +692,14 @@ class MissionService:
                             )
 
                         else:
-                            # Stop or diagnostics
                             await writer.execute_step("X", 0.1, pause_s=0.2)
+                            if await self._is_emergency_stopped(session_factory):
+                                async with session_factory() as session:
+                                    t_row = await session.get(Task, task_id)
+                                    if t_row is not None and t_row.status == "IN_PROGRESS":
+                                        t_row.status = "CANCELLED"
+                                        await session.commit()
+                                    return await self.get_mission(session, mission_id)
                             await self._broadcast_scout_pose(
                                 session_factory,
                                 curr_x,
@@ -427,11 +718,13 @@ class MissionService:
                         await self._gateway.broadcast_mission_status(detail)
 
                 # Ensure final STOP ('X') is sent and final pose is settled
-                if hardware_connected:
-                    try:
-                        await writer.send("X")
-                    except Exception:
-                        pass
+                if hardware_connected or writer.armed:
+                    await self._send_stop_and_report_fault_if_failed(
+                        writer,
+                        session_factory,
+                        mission_id,
+                        context="mission completion stop",
+                    )
 
                 await self._broadcast_scout_pose(
                     session_factory,
@@ -563,16 +856,16 @@ class MissionService:
                 task.status = "COMPLETED"
             completed_task_ids.append(task.id)
 
-        await session.commit()
-
-        await self._events.record_event(
+        event_read = await self._events.record_event(
             session,
             mission_id=mission_id,
             category=EventCategoryEnum.MISSION,
             message=f"Mission {mission_id} completed ({len(completed_task_ids)} tasks finalized).",
             timestamp=now,
+            commit=False,
+            broadcast=False,
         )
-        await self._events.record_reasoning_trace(
+        trace_read = await self._events.record_reasoning_trace(
             session,
             mission_id=mission_id,
             trigger=f"SIMULATED_MISSION_COMPLETION:{mission_id}",
@@ -582,9 +875,23 @@ class MissionService:
             ),
             resulting_task_ids=completed_task_ids,
             timestamp=now + timedelta(milliseconds=1),
+            commit=False,
+            broadcast=False,
         )
 
-        detail = await self.get_mission(session, mission_id)
+        await session.commit()
+
+        sorted_tasks = sorted(mission_row.tasks, key=lambda t: (t.priority, t.id))
+        detail = MissionDetailRead(
+            id=mission_row.id,
+            objective=mission_row.objective,
+            status=MissionStatusEnum(mission_row.status),
+            created_at=mission_row.created_at,
+            completed_at=mission_row.completed_at,
+            tasks=[TaskRead.model_validate(t) for t in sorted_tasks],
+        )
+        await self._gateway.broadcast_event(event_read)
+        await self._gateway.broadcast_reasoning_trace(trace_read)
         await self._gateway.broadcast_mission_status(detail)
         return detail
 

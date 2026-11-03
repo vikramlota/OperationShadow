@@ -1,0 +1,799 @@
+diff --git a/backend/fastapi/services/mission_service.py b/backend/fastapi/services/mission_service.py
+index cfa1dfc..3c15c1e 100644
+--- a/backend/fastapi/services/mission_service.py
++++ b/backend/fastapi/services/mission_service.py
+@@ -52,43 +52,64 @@ def _task_serial_steps(
+     upper_type = (task_type or "").upper()
+     lower_target = (target or "").lower()
+ 
+-    if total_tasks == 1 and (
+-        "RECON" in upper_type
++    # Extended realistic scanning and multi-phase reconnaissance sequence (~22-25 seconds)
++    if "DEEP" in upper_type or "corridor" in lower_target or "lobby" in lower_target:
++        return [
++            ("W", 3.0, "NAVIGATE forward down corridor (2.0m)"),
++            ("A", 1.8, "SCAN 90° sweep toward perimeter seating"),
++            ("X", 1.5, "DWELL hold for optical depth point cloud"),
++            ("D", 2.6, "SCAN pan toward central partition obstacle"),
++            ("X", 1.5, "DWELL hold for barrier boundary logging"),
++            ("A", 1.2, "ALIGN heading with corridor center"),
++            ("W", 3.0, "PROBE advance past partition"),
++            ("A", 2.8, "PANORAMA 360° visual inspection"),
++            ("W", 3.5, "RETURN traverse back to base station"),
++            ("A", 1.8, "ORIENT re-align to base heading"),
++            ("X", 0.0, "DIAGNOSTICS hold & all clear"),
++        ]
++
++    # Standard full 5-stage reconnaissance loop (~9-10 seconds)
++    if (
++        total_tasks == 1
++        or "RECON" in upper_type
+         or "return" in lower_target
+         or "sweep" in lower_target
+         or "scan" in lower_target
+     ):
+         return [
+-            ("W", 2.0, "NAVIGATE forward (1.5m)"),
+-            ("A", 1.6, "ROTATE 180-degree scan"),
+-            ("W", 2.0, "RETURN to start position"),
+-            ("A", 1.6, "ORIENT to original heading"),
++            ("W", 2.5, "NAVIGATE forward down aisle (2.0m)"),
++            ("A", 2.2, "SCAN 180° visual sweep of perimeter"),
++            ("X", 1.0, "DWELL hold for object detection"),
++            ("W", 2.5, "RETURN traverse back to start position"),
++            ("A", 1.8, "ORIENT re-align to original heading"),
+             ("X", 0.0, "DIAGNOSTICS / STOP"),
+         ]
+ 
+     if "RETURN" in upper_type or "return" in lower_target or "base" in lower_target:
+         return [
+-            ("A", 1.6, "ROTATE 180 degrees toward base"),
+-            ("W", 2.0, "RETURN to base position"),
++            ("A", 1.8, "ROTATE 180 degrees toward base"),
++            ("W", 2.5, "RETURN to base position"),
+             ("A", 1.6, "ORIENT to original heading"),
+         ]
+     if upper_type in ("SCAN", "INSPECT") or "scan" in lower_target or "360" in lower_target:
+         return [
+-            ("A", 1.6, f"{upper_type} rotational sweep"),
++            ("A", 2.4, f"{upper_type} rotational sweep"),
++            ("X", 1.5, "DWELL capture optical frame"),
++            ("D", 1.2, "COUNTER-SCAN re-center heading"),
+         ]
+     if upper_type == "AVOID" or "avoid" in lower_target or "reroute" in lower_target:
+         return [
+-            ("A", 0.8, "AVOID obstacle turn left"),
+-            ("W", 1.2, "AVOID bypass forward"),
+-            ("D", 0.8, "AVOID re-align heading"),
++            ("A", 1.0, "AVOID obstacle turn left"),
++            ("W", 1.6, "AVOID bypass forward"),
++            ("D", 1.0, "AVOID re-align heading"),
+         ]
+     if upper_type in ("STOP", "REPORT") or "stop" in lower_target or "confirm" in lower_target:
+         return [
+             ("X", 0.0, f"{upper_type} confirm systems & hold"),
+         ]
+-    # Default for NAVIGATE / EXPLORE / movement tasks
++    # Default for movement tasks
+     return [
+-        ("W", 2.0, f"{upper_type or 'NAVIGATE'} forward (1.5m)"),
++        ("W", 2.5, f"{upper_type or 'NAVIGATE'} forward"),
+     ]
+ 
+ 
+@@ -188,18 +209,18 @@ class MissionService:
+             session.add(t_row)
+             task_rows.append(t_row)
+ 
+-        await session.commit()
+-
+-        # Persist and broadcast initial mission event and reasoning trace
+-        await self._events.record_event(
++        # Persist mission, tasks, initial event, and reasoning trace in a single atomic commit
++        event_read = await self._events.record_event(
+             session,
+             mission_id=mission_id,
+             category=EventCategoryEnum.MISSION,
+             message=f"Mission {mission_id} created: {request.objective}",
+             event_id=f"{mission_id}-EVT01",
+             timestamp=now,
++            commit=False,
++            broadcast=False,
+         )
+-        await self._events.record_reasoning_trace(
++        trace_read = await self._events.record_reasoning_trace(
+             session,
+             mission_id=mission_id,
+             trigger=plan.trigger,
+@@ -207,13 +228,42 @@ class MissionService:
+             resulting_task_ids=[t.id for t in task_rows],
+             trace_id=f"{mission_id}-RT01",
+             timestamp=now + timedelta(milliseconds=1),
++            commit=False,
++            broadcast=False,
+         )
+ 
+-        detail = await self.get_mission(session, mission_id)
++        await session.commit()
++
++        sorted_tasks = sorted(task_rows, key=lambda t: (t.priority, t.id))
++        detail = MissionDetailRead(
++            id=mission_row.id,
++            objective=mission_row.objective,
++            status=MissionStatusEnum(mission_row.status),
++            created_at=mission_row.created_at,
++            completed_at=mission_row.completed_at,
++            tasks=[TaskRead.model_validate(t) for t in sorted_tasks],
++        )
++        await self._gateway.broadcast_event(event_read)
++        await self._gateway.broadcast_reasoning_trace(trace_read)
+         await self._gateway.broadcast_mission_status(detail)
+ 
+         return MissionCreateResponse(mission_id=mission_id), plan.rationale
+ 
++    async def _is_emergency_stopped(
++        self,
++        session_factory: async_sessionmaker[AsyncSession],
++    ) -> bool:
++        """Check whether SCOUT01 is currently in EMERGENCY_STOPPED state."""
++        async with session_factory() as session:
++            v_row = await session.get(Vehicle, "SCOUT01")
++            if v_row is not None and v_row.status == "EMERGENCY_STOPPED":
++                return True
++        if hasattr(self._agent, "world"):
++            scout = self._agent.world.vehicles.get("SCOUT01")
++            if scout is not None and getattr(scout, "status", "") == "EMERGENCY_STOPPED":
++                return True
++        return False
++
+     async def _broadcast_scout_pose(
+         self,
+         session_factory: async_sessionmaker[AsyncSession],
+@@ -227,6 +277,18 @@ class MissionService:
+         clean_x = round(max(0.5, min(19.5, x)), 2)
+         clean_y = round(max(0.5, min(14.5, y)), 2)
+ 
++        async with session_factory() as session:
++            v_row = await session.get(Vehicle, "SCOUT01")
++            if v_row is not None:
++                if v_row.status == "EMERGENCY_STOPPED":
++                    return
++                v_row.position_x = clean_x
++                v_row.position_y = clean_y
++                v_row.status = status
++                v_row.connection = "CONNECTED"
++                v_row.last_heartbeat = now
++                await session.commit()
++
+         await self._gateway.broadcast_vehicle_dict(
+             {
+                 "id": "SCOUT01",
+@@ -241,16 +303,6 @@ class MissionService:
+             }
+         )
+ 
+-        async with session_factory() as session:
+-            v_row = await session.get(Vehicle, "SCOUT01")
+-            if v_row is not None:
+-                v_row.position_x = clean_x
+-                v_row.position_y = clean_y
+-                v_row.status = status
+-                v_row.connection = "CONNECTED"
+-                v_row.last_heartbeat = now
+-                await session.commit()
+-
+         if hasattr(self._agent, "update_vehicle_state"):
+             await self._agent.update_vehicle_state(
+                 "SCOUT01",
+@@ -272,13 +324,19 @@ class MissionService:
+             writer = serial_writer or ScoutSerialWriter(
+                 port=settings.scout_serial_port,
+                 baudrate=settings.scout_serial_baudrate,
+-                enabled=True,
+-                hardware_lockout=False,
+-                real_mode=True,
+-                failsafe_verified=True,
++                enabled=settings.scout_serial_enabled,
++                hardware_lockout=settings.hardware_lockout,
++                real_mode=(settings.default_vehicle_mode == "real"),
++                failsafe_verified=settings.scout_serial_failsafe_verified,
+             )
+             owns_writer = serial_writer is None
+-            if not writer.armed and not settings.hardware_lockout:
++            if (
++                not writer.armed
++                and not settings.hardware_lockout
++                and settings.scout_serial_enabled
++                and settings.default_vehicle_mode == "real"
++                and settings.scout_serial_failsafe_verified
++            ):
+                 writer.armed = True
+ 
+             hardware_connected = await writer.ensure_connected()
+@@ -308,6 +366,10 @@ class MissionService:
+                     message=f"Starting SCOUT01 execution for {mission_id} via {mode_label} ({total_tasks} tasks).",
+                 )
+ 
++            if await self._is_emergency_stopped(session_factory):
++                async with session_factory() as session:
++                    return await self.get_mission(session, mission_id)
++
+             # Dead-reckoning map tracking: start SCOUT01 at Base Station WP_BASE (1.5, 1.5)
+             # heading is initially 0.0 rad (facing East, +x along Sector Alpha corridor)
+             curr_x = 1.5
+@@ -325,6 +387,15 @@ class MissionService:
+ 
+             try:
+                 for idx, task_obj in enumerate(sorted_tasks, start=1):
++                    if await self._is_emergency_stopped(session_factory):
++                        if hardware_connected:
++                            try:
++                                await writer.send("X")
++                            except Exception:
++                                pass
++                        async with session_factory() as session:
++                            return await self.get_mission(session, mission_id)
++
+                     task_id = task_obj.id
+                     task_type = task_obj.type
+                     task_target = task_obj.target
+@@ -340,6 +411,21 @@ class MissionService:
+ 
+                     steps = _task_serial_steps(task_type, task_target, total_tasks)
+                     for cmd, duration_s, step_desc in steps:
++                        if await self._is_emergency_stopped(session_factory):
++                            if hardware_connected:
++                                try:
++                                    await writer.send("X")
++                                except Exception:
++                                    pass
++                            async with session_factory() as session:
++                                t_row = await session.get(Task, task_id)
++                                if t_row is not None and t_row.status == "IN_PROGRESS":
++                                    t_row.status = "CANCELLED"
++                                    await session.commit()
++                                detail = await self.get_mission(session, mission_id)
++                                await self._gateway.broadcast_mission_status(detail)
++                                return detail
++
+                         async with session_factory() as session:
+                             await self._events.record_event(
+                                 session,
+@@ -362,6 +448,21 @@ class MissionService:
+                                     pass
+ 
+                             for _ in range(num_ticks):
++                                if await self._is_emergency_stopped(session_factory):
++                                    if hardware_connected:
++                                        try:
++                                            await writer.send("X")
++                                        except Exception:
++                                            pass
++                                    async with session_factory() as session:
++                                        t_row = await session.get(Task, task_id)
++                                        if t_row is not None and t_row.status == "IN_PROGRESS":
++                                            t_row.status = "CANCELLED"
++                                            await session.commit()
++                                        detail = await self.get_mission(session, mission_id)
++                                        await self._gateway.broadcast_mission_status(detail)
++                                        return detail
++
+                                 curr_x += step_dist * math.cos(curr_heading)
+                                 curr_y += step_dist * math.sin(curr_heading)
+                                 await self._broadcast_scout_pose(
+@@ -563,16 +664,16 @@ class MissionService:
+                 task.status = "COMPLETED"
+             completed_task_ids.append(task.id)
+ 
+-        await session.commit()
+-
+-        await self._events.record_event(
++        event_read = await self._events.record_event(
+             session,
+             mission_id=mission_id,
+             category=EventCategoryEnum.MISSION,
+             message=f"Mission {mission_id} completed ({len(completed_task_ids)} tasks finalized).",
+             timestamp=now,
++            commit=False,
++            broadcast=False,
+         )
+-        await self._events.record_reasoning_trace(
++        trace_read = await self._events.record_reasoning_trace(
+             session,
+             mission_id=mission_id,
+             trigger=f"SIMULATED_MISSION_COMPLETION:{mission_id}",
+@@ -582,9 +683,23 @@ class MissionService:
+             ),
+             resulting_task_ids=completed_task_ids,
+             timestamp=now + timedelta(milliseconds=1),
++            commit=False,
++            broadcast=False,
+         )
+ 
+-        detail = await self.get_mission(session, mission_id)
++        await session.commit()
++
++        sorted_tasks = sorted(mission_row.tasks, key=lambda t: (t.priority, t.id))
++        detail = MissionDetailRead(
++            id=mission_row.id,
++            objective=mission_row.objective,
++            status=MissionStatusEnum(mission_row.status),
++            created_at=mission_row.created_at,
++            completed_at=mission_row.completed_at,
++            tasks=[TaskRead.model_validate(t) for t in sorted_tasks],
++        )
++        await self._gateway.broadcast_event(event_read)
++        await self._gateway.broadcast_reasoning_trace(trace_read)
+         await self._gateway.broadcast_mission_status(detail)
+         return detail
+ 
+diff --git a/backend/fastapi/services/rosbridge_client.py b/backend/fastapi/services/rosbridge_client.py
+index a7af805..9b7a433 100644
+--- a/backend/fastapi/services/rosbridge_client.py
++++ b/backend/fastapi/services/rosbridge_client.py
+@@ -12,13 +12,15 @@ Architecture constraints (AGENTS.md):
+ 
+ from __future__ import annotations
+ 
++from collections.abc import Awaitable, Callable
++from datetime import datetime, timezone
+ import asyncio
+ import json
+ import logging
+-from datetime import datetime, timezone
+-from collections.abc import Awaitable, Callable
+ from typing import Any
+ 
++from core.config import settings
++
+ logger = logging.getLogger("operation_shadow.rosbridge")
+ 
+ ROSBRIDGE_URL = "ws://10.241.171.41:9090"
+@@ -130,40 +132,72 @@ async def start_rosbridge(mission_service_agent: Any | None = None) -> RosBridge
+     global _client
+ 
+     async def _handle_detection(detection: dict[str, Any]) -> None:
+-        """Forward SCOUT01 detections into ULTRON World Model."""
++        """Forward SCOUT01 detections into ULTRON World Model while preserving camera coordinate frame."""
+         objects = detection.get("objects", [])
+         if not objects or mission_service_agent is None:
+             return
+ 
+-        for obj in objects:
+-            cls = obj.get("class", "unknown")
++        frame = str(detection.get("frame") or "oak_rgb_camera_optical_frame")
++        raw_stamp = detection.get("stamp")
++        now_dt = datetime.now(timezone.utc)
++        stamp_sec = float(raw_stamp) if isinstance(raw_stamp, (int, float)) else now_dt.timestamp()
++        vehicle_id = str(detection.get("vehicle_id") or settings.ros_vehicle_id or "SCOUT01")
++
++        if hasattr(mission_service_agent, "ingest_detection_frame_into_world_model"):
++            try:
++                mission_service_agent.ingest_detection_frame_into_world_model(
++                    stamp=stamp_sec,
++                    received_at=now_dt,
++                    frame=frame,
++                    objects=objects,
++                    vehicle_id=vehicle_id,
++                    telemetry_source="rosbridge",
++                    topic=DETECTION_TOPIC,
++                    map_frame_confirmed=settings.ros_map_frame_confirmed,
++                )
++            except Exception as exc:
++                logger.debug("Failed to ingest detection frame into World Model: %s", exc)
++            return
++
++        for idx, obj in enumerate(objects):
++            if not isinstance(obj, dict):
++                continue
++            cls = str(obj.get("class", "unknown"))
+             score = float(obj.get("score", 0.0))
+             pos = obj.get("position", {})
++            if not isinstance(pos, dict):
++                continue
+             x = float(pos.get("x", 0.0))
+             y = float(pos.get("y", 0.0))
++            z = float(pos.get("z", 0.0))
+ 
+             if score < 0.5:
+                 continue  # skip low-confidence detections
+ 
+-            # Map OAK-D detection class → ULTRON observation type
+             obs_type = _class_to_obs_type(cls)
+-
+-            logger.info(
+-                "SCOUT01 detection → %s (%.0f%%) at (%.2f, %.2f)",
+-                obs_type, score * 100, x, y,
+-            )
++            map_x = x if (frame == "map" and settings.ros_map_frame_confirmed) else 0.0
++            map_y = y if (frame == "map" and settings.ros_map_frame_confirmed) else 0.0
+ 
+             try:
+                 from ultron_stub.interface import ObservationPayloadStub
+                 obs = ObservationPayloadStub(
+-                    observation_id=f"ros-{int(datetime.now(timezone.utc).timestamp()*1000)}",
+-                    mission_id=getattr(mission_service_agent, "_active_mission_id", None) or "live",
++                    observation_id=f"ros-{int(now_dt.timestamp() * 1000)}-{idx}",
++                    mission_id=getattr(mission_service_agent, "_active_mission_id", None) or "",
+                     vehicle_id="SCOUT01",
+                     obs_type=obs_type,
+                     confidence=score,
+-                    location_x=x,
+-                    location_y=y,
+-                    timestamp=datetime.now(timezone.utc),
++                    location_x=map_x,
++                    location_y=map_y,
++                    timestamp=now_dt,
++                    raw={
++                        "source": "rosbridge",
++                        "topic": DETECTION_TOPIC,
++                        "frame": frame,
++                        "stamp": stamp_sec,
++                        "class": cls,
++                        "object_id": obj.get("id", idx),
++                        "position": {"x": x, "y": y, "z": z},
++                    },
+                 )
+                 await mission_service_agent.record_observation(obs)
+             except Exception as exc:
+diff --git a/backend/fastapi/services/ultron_agent_adapter.py b/backend/fastapi/services/ultron_agent_adapter.py
+index dd6805c..54ed610 100644
+--- a/backend/fastapi/services/ultron_agent_adapter.py
++++ b/backend/fastapi/services/ultron_agent_adapter.py
+@@ -286,6 +286,8 @@ class UltronLangGraphAgent(UltronAgentPort):
+             v.connection = UltronConnectionStatus.UNKNOWN
+             v.pose_valid = False
+         self._unknown_transitions.append((vehicle_id, detected_at))
++        if len(self._unknown_transitions) > 500:
++            del self._unknown_transitions[:-500]
+ 
+     def sync_camera_sensor_health(
+         self,
+@@ -463,6 +465,30 @@ class UltronLangGraphAgent(UltronAgentPort):
+             )
+             created_obs.append(sensor_obs)
+ 
++        # Evaluate environment-driven replanning when new camera detections arrive during an active mission
++        if (
++            created_obs
++            and self._world.mission.status == UltronMissionStatus.IN_PROGRESS
++            and self._active_plan is not None
++        ):
++            should_replan, trigger_rationale = check_replanning_triggers(
++                self._world, debounce_sec=0.5, current_time=ingested_ts
++            )
++            if should_replan and trigger_rationale:
++                replan_state: UltronState = {
++                    "world": self._world,
++                    "proposed_plan": None,
++                    "validation_errors": [],
++                    "repair_prompt": None,
++                    "retry_count": 0,
++                    "trigger_rationale": trigger_rationale,
++                    "language": "English",
++                }
++                res_state = self.app.invoke(replan_state)
++                self._world = res_state["world"]
++                if res_state.get("proposed_plan") is not None:
++                    self._active_plan = res_state["proposed_plan"]
++
+         return created_obs
+ 
+     async def record_observation(
+@@ -484,6 +510,8 @@ class UltronLangGraphAgent(UltronAgentPort):
+                 "raw": observation.raw,
+             }
+         )
++        if len(self._observations) > 500:
++            del self._observations[:-500]
+ 
+         raw = observation.raw or {}
+         if isinstance(raw, dict) and "frame" in raw and "position" in raw:
+@@ -575,7 +603,7 @@ class UltronLangGraphAgent(UltronAgentPort):
+             if should_replan and trigger_rationale:
+                 replan_state: UltronState = {
+                     "world": self._world,
+-                    "proposed_plan": self._active_plan,
++                    "proposed_plan": None,
+                     "validation_errors": [],
+                     "repair_prompt": None,
+                     "retry_count": 0,
+diff --git a/backend/fastapi/websocket/vehicle_gateway.py b/backend/fastapi/websocket/vehicle_gateway.py
+index 4cd314b..26d71be 100644
+--- a/backend/fastapi/websocket/vehicle_gateway.py
++++ b/backend/fastapi/websocket/vehicle_gateway.py
+@@ -404,51 +404,64 @@ class VehicleGateway:
+                     continue
+ 
+                 msg_type = data.get("message_type") or data.get("type")
+-                if msg_type == "telemetry" or "telemetry" in data:
+-                    raw_tel = data.get("telemetry")
+-                    tel_data: dict[str, Any] = raw_tel if isinstance(raw_tel, dict) else data
+-                    ts = tel_data.get("timestamp")
+-                    if isinstance(ts, str):
+-                        try:
+-                            ts_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+-                        except Exception:
++                try:
++                    if msg_type == "telemetry" or "telemetry" in data:
++                        raw_tel = data.get("telemetry")
++                        tel_data: dict[str, Any] = raw_tel if isinstance(raw_tel, dict) else data
++                        ts = tel_data.get("timestamp")
++                        if isinstance(ts, str):
++                            try:
++                                ts_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
++                            except Exception:
++                                ts_dt = datetime.now(timezone.utc)
++                        elif isinstance(ts, datetime):
++                            ts_dt = ts
++                        else:
+                             ts_dt = datetime.now(timezone.utc)
+-                    elif isinstance(ts, datetime):
+-                        ts_dt = ts
+-                    else:
+-                        ts_dt = datetime.now(timezone.utc)
+-
+-                    stub = TelemetryPayloadStub(
+-                        vehicle_id=vid,
+-                        timestamp=ts_dt,
+-                        status=str(tel_data.get("status", "IDLE")),
+-                        battery=float(tel_data.get("battery", 100.0)),
+-                        position_x=float(tel_data.get("position_x", 0.0)),
+-                        position_y=float(tel_data.get("position_y", 0.0)),
+-                        position_alt=float(tel_data.get("position_alt", 0.0)),
+-                        raw_sensors=tel_data.get("raw_sensors"),
+-                    )
+-                    async with session_factory() as session:
+-                        await vehicle_service.ingest_telemetry(session, stub)
+-
+-                elif msg_type == "observation" or "observation" in data:
+-                    raw_obs = data.get("observation")
+-                    obs_data: dict[str, Any] = raw_obs if isinstance(raw_obs, dict) else data
+-                    ts = obs_data.get("timestamp")
+-                    ts_dt = datetime.fromisoformat(ts.replace("Z", "+00:00")) if isinstance(ts, str) else datetime.now(timezone.utc)
+-                    obs_stub = ObservationPayloadStub(
+-                        observation_id=str(obs_data.get("observation_id", f"OBS-{uuid.uuid4().hex[:6].upper()}")),
+-                        mission_id=str(obs_data.get("mission_id", "")),
+-                        vehicle_id=vid,
+-                        obs_type=str(obs_data.get("obs_type", "HAZARD_DETECTED")),
+-                        confidence=float(obs_data.get("confidence", 1.0)),
+-                        location_x=float(obs_data.get("location_x", 0.0)),
+-                        location_y=float(obs_data.get("location_y", 0.0)),
+-                        timestamp=ts_dt,
+-                        raw=obs_data.get("raw"),
++
++                        stub = TelemetryPayloadStub(
++                            vehicle_id=vid,
++                            timestamp=ts_dt,
++                            status=str(tel_data.get("status", "IDLE")),
++                            battery=float(tel_data.get("battery", 100.0)),
++                            position_x=float(tel_data.get("position_x", 0.0)),
++                            position_y=float(tel_data.get("position_y", 0.0)),
++                            position_alt=float(tel_data.get("position_alt", 0.0)),
++                            raw_sensors=tel_data.get("raw_sensors"),
++                        )
++                        async with session_factory() as session:
++                            await vehicle_service.ingest_telemetry(session, stub)
++
++                    elif msg_type == "observation" or "observation" in data:
++                        raw_obs = data.get("observation")
++                        obs_data: dict[str, Any] = raw_obs if isinstance(raw_obs, dict) else data
++                        ts = obs_data.get("timestamp")
++                        if isinstance(ts, str):
++                            try:
++                                ts_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
++                            except Exception:
++                                ts_dt = datetime.now(timezone.utc)
++                        else:
++                            ts_dt = datetime.now(timezone.utc)
++                        obs_stub = ObservationPayloadStub(
++                            observation_id=str(obs_data.get("observation_id", f"OBS-{uuid.uuid4().hex[:6].upper()}")),
++                            mission_id=str(obs_data.get("mission_id", "")),
++                            vehicle_id=vid,
++                            obs_type=str(obs_data.get("obs_type", "HAZARD_DETECTED")),
++                            confidence=float(obs_data.get("confidence", 1.0)),
++                            location_x=float(obs_data.get("location_x", 0.0)),
++                            location_y=float(obs_data.get("location_y", 0.0)),
++                            timestamp=ts_dt,
++                            raw=obs_data.get("raw"),
++                        )
++                        async with session_factory() as session:
++                            await vehicle_service.record_observation(session, obs_stub)
++                except Exception as frame_exc:
++                    logger.warning(
++                        f"Discarding malformed or invalid vehicle frame from {vid}: {frame_exc}",
++                        extra={"vehicle_id": vid},
+                     )
+-                    async with session_factory() as session:
+-                        await vehicle_service.record_observation(session, obs_stub)
++                    continue
+ 
+         except WebSocketDisconnect:
+             logger.info(f"Vehicle {vid} disconnected.")
+diff --git a/ultron/graph/nodes.py b/ultron/graph/nodes.py
+index 0724b05..935a2fe 100644
+--- a/ultron/graph/nodes.py
++++ b/ultron/graph/nodes.py
+@@ -1,4 +1,5 @@
+ import time
++from typing import Literal
+ import uuid
+ from ultron.state import UltronState, UltronStateUpdate
+ from ultron.planner.engine import invoke_gemini_planner
+@@ -86,6 +87,11 @@ def node_assign(state: UltronState) -> UltronStateUpdate:
+             sensor_sources.add(f"{sid}:{sh.status.value}")
+ 
+         trigger_str = state.get("trigger_rationale") or "INITIAL_MISSION_PLANNING"
++        confidence_val: Literal["high", "medium", "low", "unavailable"] = (
++            valid_plan.confidence  # type: ignore[assignment]
++            if valid_plan.confidence in ("high", "medium", "low", "unavailable")
++            else "medium"
++        )
+         trace = DecisionTraceEntry(
+             trace_id=f"DT-{uuid.uuid4().hex[:8].upper()}",
+             mission_id=world.mission.id or "M001",
+@@ -106,17 +112,15 @@ def node_assign(state: UltronState) -> UltronStateUpdate:
+             validation_errors=[],
+             replanning_triggered=bool(state.get("trigger_rationale")),
+             resulting_task_ids=[t.id for t in valid_plan.tasks],
+-            confidence_level=(
+-                valid_plan.confidence
+-                if valid_plan.confidence in ("high", "medium", "low", "unavailable")
+-                else "medium"
+-            ),  # type: ignore[arg-type]
++            confidence_level=confidence_val,
+             is_simulated=any(
+                 getattr(v.mode, "value", str(v.mode)) == "simulated"
+                 for v in world.vehicles.values()
+             ),
+         )
+         world.environment.decision_traces.append(trace)
++        if len(world.environment.decision_traces) > 100:
++            world.environment.decision_traces = world.environment.decision_traces[-100:]
+ 
+     # Mark active hazards/objects/tracked_objects as handled so they do not continuously retrigger replanning
+     for h in world.environment.hazards:
+@@ -136,8 +140,12 @@ def node_evaluate(state: UltronState) -> UltronStateUpdate:
+ 
+ 
+ def node_degraded(state: UltronState) -> UltronStateUpdate:
+-    """Issues safe default commands (HOLD POSITION) and records rejection trace if retries are exhausted."""
++    """Issues safe default commands (HOLD POSITION), clears rejected plan, and records rejection trace if retries are exhausted."""
++    from ultron.schemas.mission import MissionStatus
++
+     world = state["world"]
++    world.mission.status = MissionStatus.DEGRADED
++    world.mission.tasks.active.clear()
+     now = time.time()
+     errors = list(state.get("validation_errors", []))
+     trace = DecisionTraceEntry(
+@@ -161,4 +169,11 @@ def node_degraded(state: UltronState) -> UltronStateUpdate:
+         is_simulated=True,
+     )
+     world.environment.decision_traces.append(trace)
+-    return {"world": world, "validation_errors": [], "repair_prompt": None}
++    if len(world.environment.decision_traces) > 100:
++        world.environment.decision_traces = world.environment.decision_traces[-100:]
++    return {
++        "world": world,
++        "proposed_plan": None,
++        "validation_errors": errors,
++        "repair_prompt": None,
++    }
+diff --git a/ultron/graph/workflow.py b/ultron/graph/workflow.py
+index b94534f..22aa749 100644
+--- a/ultron/graph/workflow.py
++++ b/ultron/graph/workflow.py
+@@ -93,32 +93,33 @@ def build_ultron_graph() -> GraphRunner:
+     except ImportError:
+         # Fallback runner for testing when langgraph is not installed
+         class SimpleGraphRunner:
++            def _plan_and_validate_with_retries(self, st: dict[str, Any]) -> None:
++                while True:
++                    st.update(node_plan(cast(UltronState, st)))
++                    st.update(node_validate(cast(UltronState, st)))
++                    if not st.get("validation_errors"):
++                        st.update(node_assign(cast(UltronState, st)))
++                        return
++                    if int(st.get("retry_count", 0)) >= 3:
++                        st.update(node_degraded(cast(UltronState, st)))
++                        return
++
+             def invoke(
+                 self,
+                 state: UltronState,
+                 config: Any = None,
+             ) -> UltronState:
+-                st = cast(UltronState, dict(state))
++                st: dict[str, Any] = dict(state)
+                 # If a plan already exists, run evaluate -> replan (if needed)
+                 if st.get("proposed_plan") is not None:
+-                    st.update(node_evaluate(st))  # type: ignore[typeddict-item]
++                    st.update(node_evaluate(cast(UltronState, st)))
+                     if st.get("trigger_rationale"):
+-                        st.update(node_plan(st))  # type: ignore[typeddict-item]
+-                        st.update(node_validate(st))  # type: ignore[typeddict-item]
+-                        if not st.get("validation_errors"):
+-                            st.update(node_assign(st))  # type: ignore[typeddict-item]
+-                        else:
+-                            st.update(node_degraded(st))  # type: ignore[typeddict-item]
+-                    return st
+-
+-                # Initial planning pass: plan -> validate -> assign
+-                st.update(node_plan(st))  # type: ignore[typeddict-item]
+-                st.update(node_validate(st))  # type: ignore[typeddict-item]
+-                if not st.get("validation_errors"):
+-                    st.update(node_assign(st))  # type: ignore[typeddict-item]
+-                else:
+-                    st.update(node_degraded(st))  # type: ignore[typeddict-item]
+-                return st
++                        self._plan_and_validate_with_retries(st)
++                    return cast(UltronState, st)
++
++                # Initial planning pass: plan -> validate (with retries) -> assign / degraded
++                self._plan_and_validate_with_retries(st)
++                return cast(UltronState, st)
+ 
+         return SimpleGraphRunner()
+ 
+diff --git a/ultron/replanner/triggers.py b/ultron/replanner/triggers.py
+index afea132..644652f 100644
+--- a/ultron/replanner/triggers.py
++++ b/ultron/replanner/triggers.py
+@@ -118,17 +118,25 @@ def check_replanning_triggers(
+                         f"(observations: {', '.join(tobj.contributing_observation_ids)}). Initiating target response sequence."
+                     )
+ 
+-    for obj in world.environment.objects:
+-        if not getattr(obj, "handled", False) and (
+-            obj.label == world.mission.objective or obj.label == "red_package"
++    for legacy_obj in world.environment.objects:
++        if (
++            not getattr(legacy_obj, "handled", False)
++            and legacy_obj.epistemic_status != EpistemicStatusEnum.STALE
++            and (
++                legacy_obj.label == world.mission.objective
++                or legacy_obj.label == "red_package"
++            )
+         ):
+-            source_id = getattr(obj.source_vehicle, "value", str(obj.source_vehicle))
+-            sig = f"target_legacy:{obj.id}"
++            source_id = getattr(
++                legacy_obj.source_vehicle, "value", str(legacy_obj.source_vehicle)
++            )
++            sig = f"target_legacy:{legacy_obj.id}"
+             if not _should_debounce(world, sig, now, effective_debounce):
+                 _record_trigger(world, sig, now)
+                 return True, (
+-                    f"Target '{obj.label}' located by {source_id} "
+-                    f"at ({obj.location.x}, {obj.location.y}). Initiating mission completion sequence."
++                    f"Target '{legacy_obj.label}' located by {source_id} "
++                    f"at ({legacy_obj.location.x}, {legacy_obj.location.y}) in '{legacy_obj.coordinate_frame}'. "
++                    "Initiating mission completion sequence."
+                 )
+ 
+     # 4. Newly Detected Obstacle Intersecting Route / Path Blocked
+diff --git a/ultron/safety/validator.py b/ultron/safety/validator.py
+index 74fce58..6cccb12 100644
+--- a/ultron/safety/validator.py
++++ b/ultron/safety/validator.py
+@@ -82,5 +82,19 @@ def validate_plan(plan: MissionPlan, world: WorldModel) -> Tuple[bool, List[str]
+                     f"Hallucination: Task '{task.id}' references nonexistent evidence ID '{teid}'."
+                 )
+ 
++        # 5. Vehicle Battery & Connection Safety Check
++        scout = world.vehicles.get("SCOUT01")
++        if scout is not None:
++            conn_val = getattr(scout.connection, "value", str(scout.connection))
++            if conn_val == "OFFLINE":
++                errors.append(
++                    f"Vehicle Offline: SCOUT01 is OFFLINE and cannot execute task '{task.id}' ({task.type})."
++                )
++            if scout.battery <= 20.0 and task.type.upper() not in {"STOP", "REPORT", "RETURN_TO_BASE"}:
++                errors.append(
++                    f"Low Battery Safety Violation: SCOUT01 battery is {scout.battery:.1f}% (<= 20.0%); "
++                    f"cannot execute '{task.type}'."
++                )
++
+     is_valid = len(errors) == 0
+     return is_valid, errors

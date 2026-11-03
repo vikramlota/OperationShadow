@@ -208,12 +208,16 @@ def create_app(
     @application.get("/scout/status", tags=["scout"])
     async def scout_status() -> dict[str, str | bool]:
         """Return SCOUT01 ROSBridge configuration and connection status."""
-        from services.rosbridge_client import get_rosbridge_client
+        from services.rosbridge_client import build_rosbridge_url, get_rosbridge_client
 
         client = get_rosbridge_client()
+        configured_url = (
+            (client.url if client is not None and client.url else build_rosbridge_url(settings))
+            or "ws://10.241.171.41:9090"
+        )
         return {
-            "scout_id": "SCOUT01",
-            "rosbridge_url": "ws://10.241.171.41:9090",
+            "scout_id": settings.ros_vehicle_id or "SCOUT01",
+            "rosbridge_url": configured_url,
             "enabled": settings.rosbridge_enabled,
             "connected": client.connected if client else False,
             "mode": "read_only" if settings.rosbridge_enabled else "disabled",

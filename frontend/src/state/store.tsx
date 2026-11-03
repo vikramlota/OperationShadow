@@ -172,6 +172,7 @@ export type DashboardAction =
   | { type: "APPLY_WS_TELEMETRY"; payload: { telemetry: TelemetryPushPayload; sequence?: number | null } }
   | { type: "APPLY_WS_DETECTIONS"; payload: { detections: DetectionsPushPayload; sequence?: number | null } }
   | { type: "SET_DETECTIONS_STALE"; payload: { vehicleId: VehicleId; isStale: boolean } }
+  | { type: "SET_VEHICLE_STALE"; payload: { vehicleId: VehicleId; isStale: boolean } }
   | { type: "APPLY_VEHICLE_STATUS"; payload: VehicleReadPayload }
   | { type: "APPLY_WS_EVENT"; payload: EventReadPayload }
   | { type: "SET_EVENTS"; payload: EventReadPayload[] }
@@ -586,13 +587,27 @@ export function dashboardReducer(
         ultronIsStub: action.payload.ultronIsStub,
       };
 
-    case "SET_WS_CONNECTED":
+    case "SET_WS_CONNECTED": {
+      const nextVehicles = action.payload
+        ? state.vehicles
+        : {
+            ...state.vehicles,
+            SCOUT01: {
+              ...state.vehicles.SCOUT01,
+              isStale:
+                state.vehicles.SCOUT01.lastHeartbeat !== null
+                  ? true
+                  : state.vehicles.SCOUT01.isStale,
+            },
+          };
       return {
         ...state,
         wsConnected: action.payload,
         wsReconnectAttempt: action.payload ? 0 : state.wsReconnectAttempt,
         wsLastError: action.payload ? null : state.wsLastError,
+        vehicles: nextVehicles,
       };
+    }
 
     case "SET_WS_RECONNECTING":
       return {
@@ -600,6 +615,26 @@ export function dashboardReducer(
         wsConnected: false,
         wsReconnectAttempt: action.payload.attempt,
         wsLastError: action.payload.error,
+        vehicles: {
+          ...state.vehicles,
+          SCOUT01: {
+            ...state.vehicles.SCOUT01,
+            isStale:
+              state.vehicles.SCOUT01.lastHeartbeat !== null
+                ? true
+                : state.vehicles.SCOUT01.isStale,
+          },
+        },
+        detections: {
+          ...state.detections,
+          SCOUT01: {
+            ...state.detections.SCOUT01,
+            isStale:
+              state.detections.SCOUT01.hasReceivedFrame
+                ? true
+                : state.detections.SCOUT01.isStale,
+          },
+        },
       };
 
     case "SELECT_VEHICLE":
@@ -758,6 +793,24 @@ export function dashboardReducer(
         ...state,
         detections: {
           ...state.detections,
+          [vehicleId]: {
+            ...prev,
+            isStale,
+          },
+        },
+      };
+    }
+
+    case "SET_VEHICLE_STALE": {
+      const { vehicleId, isStale } = action.payload;
+      const prev = state.vehicles[vehicleId];
+      if (!prev || prev.isStale === isStale) {
+        return state;
+      }
+      return {
+        ...state,
+        vehicles: {
+          ...state.vehicles,
           [vehicleId]: {
             ...prev,
             isStale,

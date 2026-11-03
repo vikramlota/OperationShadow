@@ -92,7 +92,7 @@ async def get_environmental_intelligence_snapshot_endpoint(
             if world_obj is not None
             else []
         )
-        out = snap.model_dump(mode="json")
+        out: dict[str, Any] = dict(snap.model_dump(mode="json"))
         out["decision_traces"] = traces
         return out
     wm_snap = await agent.get_world_model_snapshot()
@@ -114,7 +114,8 @@ async def query_environmental_intelligence_endpoint(
     agent = service.agent
     if hasattr(agent, "query_environment"):
         res = agent.query_environment(payload.query)
-        return res.model_dump(mode="json")
+        result_dict: dict[str, Any] = dict(res.model_dump(mode="json"))
+        return result_dict
     return {
         "answer": "Cannot assess environment: ULTRON is running in minimal stub mode without WorldModelTools.",
         "facts": [],
