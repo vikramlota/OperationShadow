@@ -422,6 +422,248 @@ export interface MissionReplayResponsePayload {
   entries: MissionReplayTimelineEntryPayload[];
 }
 
+export interface MissionReportOverviewPayload {
+  mission_id: string;
+  objective: string;
+  created_at: string;
+  completed_at: string | null;
+  duration_seconds: number | null;
+  final_status: string;
+  vehicle_mode: string;
+  is_simulated_execution: boolean;
+  hardware_lockout_active: boolean;
+  execution_provenance: string;
+}
+
+export interface MissionReportTaskRecordPayload {
+  task_id: string;
+  vehicle_id: string;
+  task_type: string;
+  area: string | null;
+  target: string | null;
+  priority: number;
+  status: string;
+  highest_evidence_stage: string;
+  is_simulated: boolean;
+  source_trace_ids: string[];
+  provenance_note: string;
+}
+
+export interface MissionReportTaskSummaryPayload {
+  total_tasks: number;
+  completed_tasks: number;
+  pending_tasks: number;
+  assigned_tasks: number;
+  in_progress_tasks: number;
+  failed_tasks: number;
+  cancelled_tasks: number;
+  tasks: MissionReportTaskRecordPayload[];
+}
+
+export interface MissionReportObjectFindingPayload {
+  object_id: string;
+  label: string;
+  coordinate_frame: string;
+  position_x: number;
+  position_y: number;
+  position_z: number;
+  range_m: number | null;
+  map_position_x: number | null;
+  map_position_y: number | null;
+  confidence: number;
+  epistemic_status: string;
+  tracking_status: string;
+  source_mode: string;
+  is_obstacle: boolean;
+  is_hazard: boolean;
+  matches_objective_target: boolean;
+  evidence_ids: string[];
+  coordinate_frame_note: string;
+}
+
+export interface MissionReportHazardFindingPayload {
+  hazard_id: string;
+  hazard_type: string;
+  coordinate_frame: string;
+  position_x: number;
+  position_y: number;
+  confidence: number;
+  epistemic_status: string;
+  source_mode: string;
+  source_vehicle: string;
+  evidence_ids: string[];
+  handled: boolean;
+  coordinate_frame_note: string;
+}
+
+export interface MissionReportObservationFindingPayload {
+  observation_id: string;
+  vehicle_id: string;
+  sensor_type: string;
+  obs_type: string;
+  confidence: number;
+  coordinate_frame: string;
+  position_x: number;
+  position_y: number;
+  position_z: number;
+  range_m: number | null;
+  timestamp: string;
+  source_mode: string;
+  epistemic_status: string;
+  is_stale: boolean;
+}
+
+export interface MissionReportEnvironmentalFindingsPayload {
+  detected_objects: MissionReportObjectFindingPayload[];
+  identified_targets: MissionReportObjectFindingPayload[];
+  reported_hazards: MissionReportHazardFindingPayload[];
+  obstacles: MissionReportObjectFindingPayload[];
+  sensor_observations: MissionReportObservationFindingPayload[];
+  evidence_references: string[];
+  coordinate_frame_limitations: string[];
+  coverage_note: string;
+}
+
+export interface MissionReportEventRecordPayload {
+  event_id: string;
+  timestamp: string;
+  category: string;
+  event_type: string | null;
+  severity: string;
+  source: string;
+  source_mode: string;
+  message: string;
+  evidence_ids: string[];
+}
+
+export interface MissionReportStandingOrderRecordPayload {
+  standing_order_id: string;
+  source_event_id: string | null;
+  trace_id: string | null;
+  timestamp: string;
+  rationale: string;
+  resulting_task_ids: string[];
+  evidence_ids: string[];
+}
+
+export interface MissionReportTriageRecordPayload {
+  trace_id: string;
+  event_id: string | null;
+  event_type: string | null;
+  disposition: string;
+  severity: string;
+  triage_source: string;
+  rationale: string;
+  evidence_ids: string[];
+  timestamp: string;
+}
+
+export interface MissionReportDecisionRecordPayload {
+  trace_id: string;
+  timestamp: string;
+  trigger: string;
+  rationale: string;
+  source_event_id: string | null;
+  standing_order_id: string | null;
+  triage_disposition: string | null;
+  planner_source: string | null;
+  validation_passed: boolean;
+  validation_errors: string[];
+  resulting_task_ids: string[];
+  evidence_ids: string[];
+  before_snapshot_id: string | null;
+  after_snapshot_id: string | null;
+}
+
+export interface MissionReportEscalationRecordPayload {
+  record_id: string;
+  timestamp: string;
+  reason: string;
+  source_event_id: string | null;
+  standing_order_id: string | null;
+}
+
+export interface MissionReportDecisionHistoryPayload {
+  important_events: MissionReportEventRecordPayload[];
+  standing_orders_applied: MissionReportStandingOrderRecordPayload[];
+  llm_triage_outcomes: MissionReportTriageRecordPayload[];
+  replanning_operations: MissionReportDecisionRecordPayload[];
+  rejected_decisions: MissionReportDecisionRecordPayload[];
+  accepted_plans: MissionReportDecisionRecordPayload[];
+  human_escalation_events: MissionReportEscalationRecordPayload[];
+}
+
+export interface MissionReportBatteryRecordPayload {
+  min_battery: number;
+  max_battery: number;
+  final_battery: number;
+  sample_count: number;
+  critical_low_battery_observed: boolean;
+}
+
+export interface MissionReportVehicleSummaryPayload {
+  vehicle_id: string;
+  vehicle_type: string;
+  mode: string;
+  final_status: string;
+  final_connection: string;
+  connection_history: string[];
+  battery_observations: MissionReportBatteryRecordPayload;
+  task_participation_ids: string[];
+  communication_failures: string[];
+  operational_limitations: string[];
+}
+
+export interface MissionReportSafetyEventPayload {
+  record_id: string;
+  timestamp: string;
+  category:
+    | "EMERGENCY_STOP"
+    | "VALIDATION_FAILURE"
+    | "CRITICAL_FAULT"
+    | "SAFETY_WARNING";
+  description: string;
+  stop_dispatched: boolean | null;
+  vehicle_acknowledged: boolean | null;
+  physical_stop_confirmed: boolean | null;
+  is_simulated: boolean;
+}
+
+export interface MissionReportSafetySummaryPayload {
+  emergency_stop_events: MissionReportSafetyEventPayload[];
+  safety_validation_failures: MissionReportSafetyEventPayload[];
+  critical_faults: MissionReportSafetyEventPayload[];
+  stop_dispatch_acknowledged_status: string;
+  unresolved_safety_issues: string[];
+}
+
+export interface MissionReportUnresolvedItemsPayload {
+  incomplete_tasks: string[];
+  missing_observations: string[];
+  stale_telemetry_or_observations: string[];
+  conflicting_evidence: string[];
+  unverified_sensor_signals: string[];
+  unknown_outcomes: string[];
+}
+
+export interface MissionReportPayload {
+  mission_id: string;
+  generated_at: string;
+  report_deterministic: boolean;
+  llm_used_for_report: boolean;
+  historical_snapshots_count: number;
+  historical_state_available: boolean;
+  summary_text: string;
+  overview: MissionReportOverviewPayload;
+  task_summary: MissionReportTaskSummaryPayload;
+  environmental_findings: MissionReportEnvironmentalFindingsPayload;
+  decision_history: MissionReportDecisionHistoryPayload;
+  vehicle_summary: MissionReportVehicleSummaryPayload;
+  safety_summary: MissionReportSafetySummaryPayload;
+  unresolved_items: MissionReportUnresolvedItemsPayload;
+  markdown_export: string;
+}
+
 export interface FloorPlanRoomPayload {
   id: string;
   name: string;
@@ -549,6 +791,14 @@ export async function fetchMissionReplay(
 ): Promise<MissionReplayResponsePayload> {
   return requestJson<MissionReplayResponsePayload>(
     `/mission/${encodeURIComponent(missionId)}/replay`,
+  );
+}
+
+export async function fetchMissionReport(
+  missionId: string,
+): Promise<MissionReportPayload> {
+  return requestJson<MissionReportPayload>(
+    `/mission/${encodeURIComponent(missionId)}/report`,
   );
 }
 
