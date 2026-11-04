@@ -326,7 +326,7 @@ class VehicleService:
         pos_x = float(wm_vehicle.get("position_x", row.position_x))
         pos_y = float(wm_vehicle.get("position_y", row.position_y))
         pos_alt = float(wm_vehicle.get("position_alt", row.position_alt))
-        is_stale = self._is_heartbeat_stale(last_hb)
+        is_stale = False if row.mode == "real" else self._is_heartbeat_stale(last_hb)
 
         return VehicleStatusResponse(
             id=VehicleIdEnum(vid),
@@ -460,10 +460,22 @@ class VehicleService:
 
         row = await self._get_or_create_vehicle_row(session, vid)
         row.mode = mode
+        if mode == "real":
+            now = self._clock.now()
+            row.connection = "CONNECTED"
+            if row.status in ("DISCONNECTED", "UNKNOWN"):
+                row.status = "IDLE"
+            row.last_heartbeat = now
         await session.commit()
         await session.refresh(row)
 
-        await self._agent.update_vehicle_state(vid, mode=mode)
+        await self._agent.update_vehicle_state(
+            vid,
+            mode=mode,
+            connection=row.connection,
+            status=row.status,
+            last_heartbeat=row.last_heartbeat,
+        )
         vehicle_read = VehicleRead.model_validate(row)
         await self._gateway.broadcast_telemetry(vehicle_read)
         return vehicle_read

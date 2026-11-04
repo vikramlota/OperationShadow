@@ -140,6 +140,20 @@ def create_app(
         await init_db(db_engine)
         await active_perception_svc.start()
         await active_scout_control_simulator.start()
+        if (
+            not settings.hardware_lockout
+            and settings.default_vehicle_mode == "real"
+            and hasattr(active_mission_svc.agent, "update_vehicle_state")
+        ):
+            from datetime import datetime, timezone
+
+            await active_mission_svc.agent.update_vehicle_state(
+                "SCOUT01",
+                status="IDLE",
+                connection="CONNECTED",
+                mode="real",
+                last_heartbeat=datetime.now(timezone.utc),
+            )
         logger.info("Operation Shadow backend initialized.")
 
         rosbridge = None

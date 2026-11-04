@@ -43,23 +43,15 @@ async def create_mission_endpoint(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     service: Annotated[MissionService, Depends(get_mission_service)],
 ) -> MissionCreateResponse:
-    """Create a new mission via the in-process ULTRON LangGraph workflow and persist tasks (§7)."""
+    """Create a new mission via the in-process ULTRON LangGraph workflow and persist tasks (§7).
+
+    Does NOT automatically start physical execution; waits for explicit operator approval
+    via POST /mission/{mission_id}/execute so only one mission executor controls SCOUT01.
+    """
+    _ = request
     response, rationale = await service.create_mission_with_rationale(session, payload)
     if rationale:
         background_tasks.add_task(speak_rationale, rationale)
-
-    # When physical serial execution is enabled in runtime config (.env / ultron/.env),
-    # automatically execute the planned tasks on SCOUT01 in the background upon DISPATCH.
-    if not settings.hardware_lockout and settings.scout_serial_enabled:
-        session_factory = getattr(request.app.state, "session_factory", AsyncSessionLocal)
-        simulator = getattr(request.app.state, "scout_control_simulator", None)
-        serial_writer = getattr(simulator, "serial_writer", None) if simulator is not None else None
-        background_tasks.add_task(
-            service.execute_mission_on_rover,
-            session_factory,
-            response.mission_id,
-            serial_writer,
-        )
     return response
 
 
@@ -69,7 +61,7 @@ async def execute_mission_endpoint(
     request: Request,
     service: Annotated[MissionService, Depends(get_mission_service)],
 ) -> MissionDetailRead:
-    """Execute a mission's tasks on SCOUT01 (simulated dead-reckoning fallback by default; supervised ESP32 serial steps only when all four safety gates are cleared) and return the updated mission state."""
+    """Execute an approved mission's tasks on SCOUT01 using the existing physical serial-control pathway."""
     session_factory = getattr(request.app.state, "session_factory", AsyncSessionLocal)
     simulator = getattr(request.app.state, "scout_control_simulator", None)
     serial_writer = getattr(simulator, "serial_writer", None) if simulator is not None else None
@@ -77,6 +69,7 @@ async def execute_mission_endpoint(
         session_factory,
         mission_id,
         serial_writer,
+        control_simulator=simulator,
     )
 
 

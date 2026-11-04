@@ -95,6 +95,29 @@ def _task_serial_steps(
     upper_type = (task_type or "").upper()
     lower_target = (target or "").lower()
 
+    if upper_type == "AVOID" or "avoid" in lower_target or "reroute" in lower_target:
+        return [
+            ("SENSOR_AVOID", 0.0, "AVOID obstacle via sensor-verified clearance"),
+        ]
+    if upper_type in ("STOP", "REPORT") or "stop" in lower_target or "confirm" in lower_target:
+        return [
+            ("X", 0.0, f"{upper_type} confirm systems & hold"),
+        ]
+    if upper_type in ("SCAN", "INSPECT") or (
+        "scan" in lower_target and "return" not in lower_target
+    ) or "360" in lower_target:
+        return [
+            ("A", 2.4, f"{upper_type} rotational sweep"),
+            ("X", 1.5, "DWELL capture optical frame"),
+            ("D", 1.2, "COUNTER-SCAN re-center heading"),
+        ]
+    if "RETURN" in upper_type:
+        return [
+            ("A", 1.8, "ROTATE 180 degrees toward base"),
+            ("W", 2.5, "RETURN to base position"),
+            ("A", 1.6, "ORIENT to original heading"),
+        ]
+
     # Extended realistic scanning and multi-phase reconnaissance sequence (~22-25 seconds)
     if "DEEP" in upper_type or "corridor" in lower_target or "lobby" in lower_target:
         return [
@@ -128,28 +151,6 @@ def _task_serial_steps(
             ("X", 0.0, "DIAGNOSTICS / STOP"),
         ]
 
-    if "RETURN" in upper_type or "return" in lower_target or "base" in lower_target:
-        return [
-            ("A", 1.8, "ROTATE 180 degrees toward base"),
-            ("W", 2.5, "RETURN to base position"),
-            ("A", 1.6, "ORIENT to original heading"),
-        ]
-    if upper_type in ("SCAN", "INSPECT") or "scan" in lower_target or "360" in lower_target:
-        return [
-            ("A", 2.4, f"{upper_type} rotational sweep"),
-            ("X", 1.5, "DWELL capture optical frame"),
-            ("D", 1.2, "COUNTER-SCAN re-center heading"),
-        ]
-    if upper_type == "AVOID" or "avoid" in lower_target or "reroute" in lower_target:
-        return [
-            ("A", 1.0, "AVOID obstacle turn left"),
-            ("W", 1.6, "AVOID bypass forward"),
-            ("D", 1.0, "AVOID re-align heading"),
-        ]
-    if upper_type in ("STOP", "REPORT") or "stop" in lower_target or "confirm" in lower_target:
-        return [
-            ("X", 0.0, f"{upper_type} confirm systems & hold"),
-        ]
     # Default for movement tasks
     return [
         ("W", 2.5, f"{upper_type or 'NAVIGATE'} forward"),
@@ -556,6 +557,369 @@ class MissionService:
                 )
             return False
 
+    def _find_active_obstacle(
+        self,
+        avoided_keys: set[str],
+    ) -> dict[str, Any] | None:
+        """Check WorldModel environment for any non-stale obstacle within stopping range (<= 1.8m).
+
+        Operates directly on ingested depth-camera and LiDAR observations independent of Gemini/LLM availability.
+        """
+        if not hasattr(self._agent, "world"):
+            return None
+
+        env = self._agent.world.environment
+        obstacle_labels = {
+            "obstacle",
+            "lidar_obstacle",
+            "chair",
+            "bench",
+            "box",
+            "wall",
+            "barrier",
+            "table",
+            "cone",
+            "person",
+        }
+
+        for oid, obj in env.tracked_objects.items():
+            if oid in avoided_keys:
+                continue
+            track_status = str(
+                getattr(obj.tracking_status, "value", obj.tracking_status)
+            ).upper()
+            ep_status = str(
+                getattr(obj.epistemic_status, "value", obj.epistemic_status)
+            ).upper()
+            if track_status == "STALE" or ep_status == "STALE":
+                continue
+            is_obs = bool(
+                getattr(obj, "is_obstacle", False)
+                or str(obj.label).strip().lower() in obstacle_labels
+            )
+            if not is_obs:
+                continue
+
+            pos = obj.position
+            rng = getattr(pos, "range_m", None)
+            if rng is not None and float(rng) > 0.0:
+                dist = float(rng)
+            elif "optical" in str(obj.coordinate_frame).lower() and float(pos.z) > 0.0:
+                dist = float(pos.z)
+            else:
+                dist = math.hypot(float(pos.x), float(pos.y))
+
+            if 0.02 <= dist <= 1.8:
+                contrib = [str(x) for x in getattr(obj, "contributing_observation_ids", [])]
+                return {
+                    "key": oid,
+                    "label": str(obj.label),
+                    "distance_m": round(dist, 2),
+                    "coordinate_frame": str(obj.coordinate_frame),
+                    "x": float(pos.x),
+                    "y": float(pos.y),
+                    "z": float(pos.z),
+                    "epistemic_status": ep_status,
+                    "evidence_ids": contrib or [oid],
+                    "all_keys": {oid, *contrib},
+                }
+
+        for obs in reversed(env.observation_history):
+            if obs.observation_id in avoided_keys:
+                continue
+            if getattr(obs, "is_stale", False):
+                continue
+            obs_ep = getattr(obs, "epistemic_status", "OBSERVED")
+            ep_status = str(getattr(obs_ep, "value", obs_ep)).upper()
+            if ep_status == "STALE":
+                continue
+            is_obs = bool(
+                getattr(obs, "is_obstacle", False)
+                or str(obs.classification or "").strip().lower() in obstacle_labels
+            )
+            if not is_obs:
+                continue
+
+            pos = obs.position
+            rng = getattr(pos, "range_m", None)
+            if rng is not None and float(rng) > 0.0:
+                dist = float(rng)
+            elif "optical" in str(obs.coordinate_frame).lower() and float(pos.z) > 0.0:
+                dist = float(pos.z)
+            else:
+                dist = math.hypot(float(pos.x), float(pos.y))
+
+            if 0.02 <= dist <= 1.8:
+                return {
+                    "key": obs.observation_id,
+                    "label": str(obs.classification or "obstacle"),
+                    "distance_m": round(dist, 2),
+                    "coordinate_frame": str(obs.coordinate_frame),
+                    "x": float(pos.x),
+                    "y": float(pos.y),
+                    "z": float(pos.z),
+                    "epistemic_status": ep_status,
+                    "evidence_ids": [obs.observation_id],
+                    "all_keys": {obs.observation_id},
+                }
+
+        for k_pos in env.known_obstacles:
+            k_id = f"known:{k_pos.x:.2f},{k_pos.y:.2f}"
+            if k_id in avoided_keys:
+                continue
+            dist = math.hypot(float(k_pos.x), float(k_pos.y))
+            if dist <= 0.0:
+                dist = 1.0
+            return {
+                "key": k_id,
+                "label": "known_obstacle",
+                "distance_m": round(dist, 2),
+                "coordinate_frame": "map",
+                "x": float(k_pos.x),
+                "y": float(k_pos.y),
+                "z": 0.0,
+                "epistemic_status": "OBSERVED",
+                "evidence_ids": [k_id],
+                "all_keys": {k_id},
+            }
+
+        return None
+
+    def _collect_all_current_obstacle_keys(self) -> set[str]:
+        """Return all currently present obstacle IDs in WorldModel so a bypassed obstacle is not re-triggered."""
+        keys: set[str] = set()
+        if not hasattr(self._agent, "world"):
+            return keys
+        env = self._agent.world.environment
+        for oid, obj in env.tracked_objects.items():
+            if getattr(obj, "is_obstacle", False):
+                keys.add(oid)
+                for cid in getattr(obj, "contributing_observation_ids", []):
+                    keys.add(str(cid))
+        for obs in env.observation_history:
+            if getattr(obs, "is_obstacle", False):
+                keys.add(obs.observation_id)
+        for k_pos in env.known_obstacles:
+            keys.add(f"known:{k_pos.x:.2f},{k_pos.y:.2f}")
+        return keys
+
+    def _evaluate_sensor_avoidance_direction(
+        self,
+    ) -> tuple[str | None, str, list[str]]:
+        """Evaluate available space from active sensor geometry and return (cmd, rationale, evidence_ids).
+
+        Never invents sensor data or free space. If sensor geometry is missing, stale,
+        conflicted, or cannot verify a clear lateral alternative, returns (None, reason, evidence_ids)
+        so SCOUT01 stops and reports blocked rather than guessing.
+        """
+        if not hasattr(self._agent, "world"):
+            return (
+                None,
+                "World Model sensor geometry is unavailable; cannot verify a safe avoidance route.",
+                [],
+            )
+
+        env = self._agent.world.environment
+        obstacle_labels = {
+            "obstacle",
+            "lidar_obstacle",
+            "chair",
+            "bench",
+            "box",
+            "wall",
+            "barrier",
+            "table",
+            "cone",
+            "person",
+        }
+
+        evidence_ids: list[str] = []
+        lateral_offsets_right_m: list[float] = []
+        left_blocked = False
+        right_blocked = False
+        center_blocked = False
+
+        # 1. Inspect active tracked objects
+        for oid, obj in env.tracked_objects.items():
+            track_status = str(
+                getattr(obj.tracking_status, "value", obj.tracking_status)
+            ).upper()
+            ep_status = str(
+                getattr(obj.epistemic_status, "value", obj.epistemic_status)
+            ).upper()
+            if track_status == "STALE" or ep_status == "STALE":
+                continue
+            is_obs = bool(
+                getattr(obj, "is_obstacle", False)
+                or str(obj.label).strip().lower() in obstacle_labels
+            )
+            if not is_obs:
+                continue
+
+            if ep_status == "CONFLICTED":
+                return (
+                    None,
+                    f"Sensor conflict on object {oid} ({obj.label}); cannot verify a safe avoidance direction.",
+                    [oid],
+                )
+
+            pos = obj.position
+            rng = getattr(pos, "range_m", None)
+            dist = (
+                float(rng)
+                if (rng is not None and float(rng) > 0.0)
+                else (
+                    float(pos.z)
+                    if "optical" in str(obj.coordinate_frame).lower()
+                    and float(pos.z) > 0.0
+                    else math.hypot(float(pos.x), float(pos.y))
+                )
+            )
+            if dist > 2.5:
+                continue
+
+            frame_lower = str(obj.coordinate_frame).lower()
+            if "optical" in frame_lower:
+                # Optical frame: +X is right, -X is left
+                lat_right = float(pos.x)
+            else:
+                # ROS FLU (unilidar_lidar, oak_parent_frame, base_link): +Y is left, -Y is right
+                lat_right = -float(pos.y)
+
+            lateral_offsets_right_m.append(lat_right)
+            evidence_ids.append(oid)
+            for cid in getattr(obj, "contributing_observation_ids", []):
+                if str(cid) not in evidence_ids:
+                    evidence_ids.append(str(cid))
+
+            if lat_right < -0.08:
+                left_blocked = True
+            elif lat_right > 0.08:
+                right_blocked = True
+            else:
+                center_blocked = True
+
+        # 2. Inspect recent non-stale sensor observations (including LiDAR sector metadata)
+        for obs in env.observation_history[-25:]:
+            if getattr(obs, "is_stale", False):
+                continue
+            obs_ep = getattr(obs, "epistemic_status", "OBSERVED")
+            ep_status = str(getattr(obs_ep, "value", obs_ep)).upper()
+            if ep_status == "STALE":
+                continue
+            is_obs = bool(
+                getattr(obs, "is_obstacle", False)
+                or str(obs.classification or "").strip().lower() in obstacle_labels
+            )
+            if not is_obs:
+                continue
+
+            if ep_status == "CONFLICTED":
+                return (
+                    None,
+                    f"Conflicting sensor observation {obs.observation_id}; cannot verify a safe avoidance direction.",
+                    [obs.observation_id],
+                )
+
+            pos = obs.position
+            rng = getattr(pos, "range_m", None)
+            dist = (
+                float(rng)
+                if (rng is not None and float(rng) > 0.0)
+                else (
+                    float(pos.z)
+                    if "optical" in str(obs.coordinate_frame).lower()
+                    and float(pos.z) > 0.0
+                    else math.hypot(float(pos.x), float(pos.y))
+                )
+            )
+            if dist > 2.5:
+                continue
+
+            raw_ref = obs.raw_reference if isinstance(obs.raw_reference, dict) else {}
+            sector = str(raw_ref.get("sector", "")).lower()
+            frame_lower = str(obs.coordinate_frame).lower()
+            if sector in ("left", "front_left"):
+                lat_right = -0.35
+            elif sector in ("right", "front_right"):
+                lat_right = 0.35
+            elif "optical" in frame_lower:
+                lat_right = float(pos.x)
+            else:
+                lat_right = -float(pos.y)
+
+            lateral_offsets_right_m.append(lat_right)
+            if obs.observation_id not in evidence_ids:
+                evidence_ids.append(obs.observation_id)
+
+            if lat_right < -0.08:
+                left_blocked = True
+            elif lat_right > 0.08:
+                right_blocked = True
+            else:
+                center_blocked = True
+
+        if not evidence_ids:
+            return (
+                None,
+                "No fresh camera/depth or LiDAR sensor geometry available to verify free space; refusing to guess avoidance direction.",
+                [],
+            )
+
+        if left_blocked and right_blocked:
+            return (
+                None,
+                f"Both left and right corridors are obstructed in sensor geometry (evidence={evidence_ids}); no safe bypass available.",
+                evidence_ids,
+            )
+
+        if left_blocked and not right_blocked:
+            min_lat = min(lateral_offsets_right_m) if lateral_offsets_right_m else -0.2
+            return (
+                "D",
+                f"Obstacle detected on left (lateral offset {min_lat:+.2f}m, evidence={evidence_ids}); sensor geometry verifies right corridor is clear -> turning RIGHT ('D').",
+                evidence_ids,
+            )
+
+        if right_blocked and not left_blocked:
+            max_lat = max(lateral_offsets_right_m) if lateral_offsets_right_m else 0.2
+            return (
+                "A",
+                f"Obstacle detected on right (lateral offset {max_lat:+.2f}m, evidence={evidence_ids}); sensor geometry verifies left corridor is clear -> turning LEFT ('A').",
+                evidence_ids,
+            )
+
+        # Center-blocked case: require explicit LiDAR free-space coverage + non-zero lateral clearance bias
+        free_cov = env.free_space_coverage_m
+        mean_lat = (
+            sum(lateral_offsets_right_m) / len(lateral_offsets_right_m)
+            if lateral_offsets_right_m
+            else 0.0
+        )
+        if (
+            center_blocked
+            and free_cov is not None
+            and float(free_cov) >= 1.2
+            and abs(mean_lat) >= 0.03
+        ):
+            if mean_lat > 0.0:
+                return (
+                    "A",
+                    f"Central obstacle biased right ({mean_lat:+.2f}m) with verified LiDAR free-space radius {float(free_cov):.2f}m -> turning LEFT ('A').",
+                    evidence_ids,
+                )
+            return (
+                "D",
+                f"Central obstacle biased left ({mean_lat:+.2f}m) with verified LiDAR free-space radius {float(free_cov):.2f}m -> turning RIGHT ('D').",
+                evidence_ids,
+            )
+
+        return (
+            None,
+            f"Obstacle is dead-center (lateral offset {mean_lat:+.2f}m, evidence={evidence_ids}) and sensor geometry cannot verify lateral clearance on either side; holding position.",
+            evidence_ids,
+        )
+
     async def _broadcast_scout_pose(
         self,
         session_factory: async_sessionmaker[AsyncSession],
@@ -564,21 +928,32 @@ class MissionService:
         status: str = "EXECUTING",
         is_real: bool = True,
     ) -> None:
-        """Broadcast live SCOUT01 position to WebSocket clients and sync to SQLite/WorldModel."""
+        """Broadcast live SCOUT01 state to WebSocket clients and sync to SQLite/WorldModel without fabricating telemetry."""
         if await self._is_emergency_stopped(session_factory):
             return
 
         now = datetime.now(timezone.utc)
         clean_x = round(max(0.5, min(19.5, x)), 2)
         clean_y = round(max(0.5, min(14.5, y)), 2)
+        actual_battery = 100.0
+        actual_x = clean_x
+        actual_y = clean_y
+        actual_mode = "real" if is_real else "simulated"
 
         async with session_factory() as session:
             v_row = await session.get(Vehicle, "SCOUT01")
             if v_row is not None:
                 if v_row.status == "EMERGENCY_STOPPED":
                     return
-                v_row.position_x = clean_x
-                v_row.position_y = clean_y
+                actual_battery = float(v_row.battery)
+                actual_mode = v_row.mode or actual_mode
+                # Never overwrite real vehicle coordinates with invented dead-reckoning
+                if is_real or v_row.mode == "real":
+                    actual_x = float(v_row.position_x)
+                    actual_y = float(v_row.position_y)
+                else:
+                    v_row.position_x = clean_x
+                    v_row.position_y = clean_y
                 v_row.status = status
                 v_row.connection = "CONNECTED"
                 v_row.last_heartbeat = now
@@ -589,10 +964,10 @@ class MissionService:
                 "id": "SCOUT01",
                 "status": status,
                 "connection": "CONNECTED",
-                "mode": "real" if is_real else "simulated",
-                "battery": 94.0,
-                "position_x": clean_x,
-                "position_y": clean_y,
+                "mode": actual_mode,
+                "battery": actual_battery,
+                "position_x": actual_x,
+                "position_y": actual_y,
                 "position_alt": 0.0,
                 "last_heartbeat": now,
             }
@@ -601,23 +976,210 @@ class MissionService:
         if hasattr(self._agent, "update_vehicle_state"):
             await self._agent.update_vehicle_state(
                 "SCOUT01",
-                position_x=clean_x,
-                position_y=clean_y,
+                position_x=actual_x,
+                position_y=actual_y,
                 status=status,
                 connection="CONNECTED",
                 last_heartbeat=now,
             )
+
+    async def _abort_blocked_mission(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        writer: ScoutSerialWriter,
+        mission_id: str,
+        task_id: str,
+        reason: str,
+        evidence_ids: list[str],
+        curr_x: float,
+        curr_y: float,
+        hardware_connected: bool,
+    ) -> MissionDetailRead:
+        """Hold SCOUT01 stopped ('X'), mark task and mission FAILED (blocked), and broadcast over WebSockets."""
+        if hardware_connected or writer.armed:
+            await self._send_stop_and_report_fault_if_failed(
+                writer,
+                session_factory,
+                mission_id,
+                context=f"blocked obstacle hold on {task_id}",
+            )
+
+        await self._broadcast_scout_pose(
+            session_factory,
+            curr_x,
+            curr_y,
+            status="IDLE",
+            is_real=hardware_connected,
+        )
+
+        async with session_factory() as session:
+            if hasattr(self._agent, "sync_event_intelligence_to_event_service"):
+                await self._agent.sync_event_intelligence_to_event_service(
+                    session,
+                    self._events,
+                    mission_id=mission_id,
+                    broadcast=True,
+                )
+
+            stmt = (
+                select(Mission)
+                .where(Mission.id == mission_id)
+                .options(selectinload(Mission.tasks))
+            )
+            m_row = (await session.execute(stmt)).scalar_one_or_none()
+            if m_row is not None:
+                m_row.status = MissionStatusEnum.FAILED.value
+                for t in m_row.tasks:
+                    if t.id == task_id:
+                        t.status = "FAILED"
+                    elif t.status in ("ASSIGNED", "IN_PROGRESS"):
+                        t.status = "CANCELLED"
+                await session.commit()
+
+            if hasattr(self._agent, "world") and self._agent.world.mission.id == mission_id:
+                self._agent.world.mission.status = UltronMissionStatus.FAILED
+
+            await self._events.record_event(
+                session,
+                mission_id=mission_id,
+                category=EventCategoryEnum.SAFETY,
+                message=f"SCOUT01 BLOCKED on {task_id}: {reason} Rover stopped ('X') and holding position.",
+            )
+            await self._events.record_reasoning_trace(
+                session,
+                mission_id=mission_id,
+                trigger=f"OBSTACLE_AVOIDANCE_BLOCKED:{task_id}",
+                rationale=f"Immediate stop ('X') executed. {reason}",
+                resulting_task_ids=[task_id],
+            )
+            detail = await self.get_mission(session, mission_id)
+            await self._gateway.broadcast_mission_status(detail)
+            return detail
+
+    async def _execute_sensor_verified_avoidance(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        writer: ScoutSerialWriter,
+        mission_id: str,
+        task_id: str,
+        avoid_cmd: str,
+        avoid_reason: str,
+        evidence_ids: list[str],
+        curr_x: float,
+        curr_y: float,
+        curr_heading: float,
+        hardware_connected: bool,
+    ) -> tuple[bool, float, float, float]:
+        """Physically execute a sensor-verified obstacle bypass maneuver ('A'/'D' -> 'W' -> counter-turn -> 'X')."""
+        from services.scout_serial_writer import wait_unless_emergency_stopped
+
+        counter_cmd = "D" if avoid_cmd == "A" else "A"
+        turn_label = "LEFT ('A')" if avoid_cmd == "A" else "RIGHT ('D')"
+
+        async with session_factory() as session:
+            await self._events.record_event(
+                session,
+                mission_id=mission_id,
+                category=EventCategoryEnum.MISSION,
+                message=(
+                    f"SCOUT01 executing sensor-verified avoidance on {task_id}: {avoid_reason}"
+                ),
+            )
+            await self._events.record_reasoning_trace(
+                session,
+                mission_id=mission_id,
+                trigger=f"SENSOR_VERIFIED_AVOIDANCE:{task_id}",
+                rationale=avoid_reason,
+                resulting_task_ids=[task_id],
+            )
+
+        # 1. Turn toward verified free corridor
+        turn_angle = math.pi / 4.0 if avoid_cmd == "A" else -(math.pi / 4.0)
+        curr_heading = (curr_heading + turn_angle) % (2.0 * math.pi)
+        await writer.execute_step(avoid_cmd, 0.8, pause_s=0.2)
+        if await self._is_emergency_stopped(session_factory):
+            return False, curr_x, curr_y, curr_heading
+
+        # 2. Traverse bypass corridor forward ('W')
+        bypass_duration = 1.2
+        if hardware_connected:
+            try:
+                await writer.send("W")
+            except Exception as exc:
+                logger.error(f"Serial write error during avoidance bypass 'W': {exc}")
+                await self._send_stop_and_report_fault_if_failed(
+                    writer,
+                    session_factory,
+                    mission_id,
+                    context=f"avoidance bypass 'W' on {task_id}",
+                )
+                return False, curr_x, curr_y, curr_heading
+
+        if not await wait_unless_emergency_stopped(bypass_duration):
+            await self._send_stop_and_report_fault_if_failed(
+                writer,
+                session_factory,
+                mission_id,
+                context=f"avoidance bypass E-Stop on {task_id}",
+            )
+            return False, curr_x, curr_y, curr_heading
+
+        if hardware_connected or writer.armed:
+            await self._send_stop_and_report_fault_if_failed(
+                writer,
+                session_factory,
+                mission_id,
+                context=f"avoidance bypass stop on {task_id}",
+            )
+
+        if not hardware_connected:
+            curr_x += 0.8 * math.cos(curr_heading)
+            curr_y += 0.8 * math.sin(curr_heading)
+
+        # 3. Re-align heading toward destination
+        curr_heading = (curr_heading - turn_angle) % (2.0 * math.pi)
+        await writer.execute_step(counter_cmd, 0.8, pause_s=0.2)
+        if await self._is_emergency_stopped(session_factory):
+            return False, curr_x, curr_y, curr_heading
+
+        await self._broadcast_scout_pose(
+            session_factory,
+            curr_x,
+            curr_y,
+            status="EXECUTING",
+            is_real=hardware_connected,
+        )
+
+        async with session_factory() as session:
+            await self._events.record_event(
+                session,
+                mission_id=mission_id,
+                category=EventCategoryEnum.TELEMETRY,
+                message=(
+                    f"SCOUT01 completed sensor-verified {turn_label} bypass and re-aligned toward destination."
+                ),
+            )
+
+        return True, curr_x, curr_y, curr_heading
 
     async def execute_mission_on_rover(
         self,
         session_factory: async_sessionmaker[AsyncSession],
         mission_id: str,
         serial_writer: ScoutSerialWriter | None = None,
+        control_simulator: Any | None = None,
     ) -> MissionDetailRead:
-        """Execute a mission's planned tasks on SCOUT01 via ESP32 serial and dead-reckon position on the map."""
+        """Execute a mission's planned tasks on SCOUT01 via ESP32 serial with live obstacle detection and ULTRON replanning."""
         from services.scout_serial_writer import wait_unless_emergency_stopped
 
         async with self._execution_lock:
+            if control_simulator is not None and hasattr(
+                control_simulator, "acquire_mission_executor_lease"
+            ):
+                res_acq = control_simulator.acquire_mission_executor_lease()
+                if asyncio.iscoroutine(res_acq):
+                    await res_acq
+
             writer = serial_writer or ScoutSerialWriter(
                 port=settings.scout_serial_port,
                 baudrate=settings.scout_serial_baudrate,
@@ -636,64 +1198,114 @@ class MissionService:
             ):
                 writer.armed = True
 
-            hardware_connected = await writer.ensure_connected()
+            try:
+                hardware_connected = await writer.ensure_connected()
 
-            async with session_factory() as session:
-                stmt = (
-                    select(Mission)
-                    .where(Mission.id == mission_id)
-                    .options(selectinload(Mission.tasks))
-                )
-                mission_row = (await session.execute(stmt)).scalar_one_or_none()
-                if mission_row is None:
-                    raise ResourceNotFoundError("Mission", mission_id)
-
-                sorted_tasks = sorted(mission_row.tasks, key=lambda t: (t.priority, t.id))
-                total_tasks = len(sorted_tasks)
-                mode_label = (
-                    f"ESP32 serial ({writer.port})"
-                    if hardware_connected
-                    else f"simulated fallback ({writer.port} not connected)"
-                )
-
-                await self._events.record_event(
-                    session,
-                    mission_id=mission_id,
-                    category=EventCategoryEnum.MISSION,
-                    message=f"Starting SCOUT01 execution for {mission_id} via {mode_label} ({total_tasks} tasks).",
-                )
-
-            safe_ok, safe_reason = await self._validate_scout_execution_safety(
-                session_factory
-            )
-            if not safe_ok:
-                logger.warning(
-                    f"Aborting execute_mission_on_rover for {mission_id}: {safe_reason}"
-                )
                 async with session_factory() as session:
+                    stmt = (
+                        select(Mission)
+                        .where(Mission.id == mission_id)
+                        .options(selectinload(Mission.tasks))
+                    )
+                    mission_row = (await session.execute(stmt)).scalar_one_or_none()
+                    if mission_row is None:
+                        raise ResourceNotFoundError("Mission", mission_id)
+
+                    sorted_tasks = sorted(
+                        mission_row.tasks, key=lambda t: (t.priority, t.id)
+                    )
+                    total_tasks = len(sorted_tasks)
+                    mode_label = (
+                        f"ESP32 serial ({writer.port})"
+                        if hardware_connected
+                        else f"simulated fallback ({writer.port} not connected)"
+                    )
+
                     await self._events.record_event(
                         session,
                         mission_id=mission_id,
-                        category=EventCategoryEnum.SAFETY,
-                        message=f"Execution blocked by SCOUT01 safety check: {safe_reason}",
+                        category=EventCategoryEnum.MISSION,
+                        message=f"Starting SCOUT01 execution for {mission_id} via {mode_label} ({total_tasks} tasks).",
                     )
-                    return await self.get_mission(session, mission_id)
 
-            # Dead-reckoning map tracking: start SCOUT01 at Base Station WP_BASE (1.5, 1.5)
-            curr_x = 1.5
-            curr_y = 1.5
-            curr_heading = 0.0
+                safe_ok, safe_reason = await self._validate_scout_execution_safety(
+                    session_factory
+                )
+                if not safe_ok:
+                    logger.warning(
+                        f"Aborting execute_mission_on_rover for {mission_id}: {safe_reason}"
+                    )
+                    async with session_factory() as session:
+                        await self._events.record_event(
+                            session,
+                            mission_id=mission_id,
+                            category=EventCategoryEnum.SAFETY,
+                            message=f"Execution blocked by SCOUT01 safety check: {safe_reason}",
+                        )
+                        return await self.get_mission(session, mission_id)
 
-            await self._broadcast_scout_pose(
-                session_factory,
-                curr_x,
-                curr_y,
-                status="ACTIVE",
-                is_real=hardware_connected,
-            )
+                curr_x = 1.5
+                curr_y = 1.5
+                curr_heading = 0.0
+                avoided_obstacle_keys: set[str] = set()
+                physical_avoidance_performed = False
 
-            try:
-                for idx, task_obj in enumerate(sorted_tasks, start=1):
+                await self._broadcast_scout_pose(
+                    session_factory,
+                    curr_x,
+                    curr_y,
+                    status="ACTIVE",
+                    is_real=hardware_connected,
+                )
+
+                max_task_iterations = 25
+                tasks_executed_count = 0
+
+                while tasks_executed_count < max_task_iterations:
+                    # Sync any pending ULTRON replanning/standing-order updates to SQLite before selecting next task
+                    async with session_factory() as session:
+                        if hasattr(
+                            self._agent, "sync_event_intelligence_to_event_service"
+                        ):
+                            ev_synced, rt_synced = (
+                                await self._agent.sync_event_intelligence_to_event_service(
+                                    session,
+                                    self._events,
+                                    mission_id=mission_id,
+                                    broadcast=True,
+                                )
+                            )
+                            if ev_synced or rt_synced:
+                                detail_sync = await self.get_mission(session, mission_id)
+                                await self._gateway.broadcast_mission_status(detail_sync)
+
+                        stmt = (
+                            select(Mission)
+                            .where(Mission.id == mission_id)
+                            .options(selectinload(Mission.tasks))
+                        )
+                        m_row = (await session.execute(stmt)).scalar_one_or_none()
+                        if m_row is None:
+                            raise ResourceNotFoundError("Mission", mission_id)
+
+                        all_tasks = sorted(
+                            m_row.tasks, key=lambda t: (t.priority, t.id)
+                        )
+                        total_tasks = len(all_tasks)
+                        pending_tasks = [
+                            t for t in all_tasks if t.status == "ASSIGNED"
+                        ]
+                        if not pending_tasks:
+                            break
+
+                        task_obj = pending_tasks[0]
+                        task_id = task_obj.id
+                        task_type = task_obj.type
+                        task_target = task_obj.target
+
+                    tasks_executed_count += 1
+                    idx = tasks_executed_count
+
                     safe_ok, safe_reason = await self._validate_scout_execution_safety(
                         session_factory
                     )
@@ -708,10 +1320,6 @@ class MissionService:
                         async with session_factory() as session:
                             return await self.get_mission(session, mission_id)
 
-                    task_id = task_obj.id
-                    task_type = task_obj.type
-                    task_target = task_obj.target
-
                     # Mark task IN_PROGRESS and broadcast to dashboard
                     async with session_factory() as session:
                         t_row = await session.get(Task, task_id)
@@ -722,6 +1330,8 @@ class MissionService:
                         await self._gateway.broadcast_mission_status(detail)
 
                     steps = _task_serial_steps(task_type, task_target, total_tasks)
+                    task_superseded_by_replan = False
+
                     for cmd, duration_s, step_desc in steps:
                         safe_ok, safe_reason = await self._validate_scout_execution_safety(
                             session_factory
@@ -742,6 +1352,74 @@ class MissionService:
                                 detail = await self.get_mission(session, mission_id)
                                 await self._gateway.broadcast_mission_status(detail)
                                 return detail
+
+                        if cmd == "SENSOR_AVOID":
+                            # Sensor-driven obstacle avoidance step (never blind hardcoded timed turns)
+                            if physical_avoidance_performed and not self._find_active_obstacle(
+                                avoided_obstacle_keys
+                            ):
+                                async with session_factory() as session:
+                                    await self._events.record_event(
+                                        session,
+                                        mission_id=mission_id,
+                                        category=EventCategoryEnum.TELEMETRY,
+                                        message=f"[{idx}/{total_tasks}] {task_id}: Obstacle already cleared via sensor-verified bypass.",
+                                    )
+                                continue
+
+                            if hardware_connected or writer.armed:
+                                await self._send_stop_and_report_fault_if_failed(
+                                    writer,
+                                    session_factory,
+                                    mission_id,
+                                    context=f"obstacle evaluation stop on {task_id}",
+                                )
+
+                            avoid_cmd, avoid_reason, ev_ids = (
+                                self._evaluate_sensor_avoidance_direction()
+                            )
+                            if avoid_cmd is None:
+                                return await self._abort_blocked_mission(
+                                    session_factory,
+                                    writer,
+                                    mission_id,
+                                    task_id,
+                                    avoid_reason,
+                                    ev_ids,
+                                    curr_x,
+                                    curr_y,
+                                    hardware_connected,
+                                )
+
+                            ok_avoid, curr_x, curr_y, curr_heading = (
+                                await self._execute_sensor_verified_avoidance(
+                                    session_factory,
+                                    writer,
+                                    mission_id,
+                                    task_id,
+                                    avoid_cmd,
+                                    avoid_reason,
+                                    ev_ids,
+                                    curr_x,
+                                    curr_y,
+                                    curr_heading,
+                                    hardware_connected,
+                                )
+                            )
+                            avoided_obstacle_keys.update(
+                                self._collect_all_current_obstacle_keys()
+                            )
+                            physical_avoidance_performed = True
+                            if not ok_avoid:
+                                async with session_factory() as session:
+                                    t_row = await session.get(Task, task_id)
+                                    if t_row is not None and t_row.status == "IN_PROGRESS":
+                                        t_row.status = "CANCELLED"
+                                        await session.commit()
+                                    detail = await self.get_mission(session, mission_id)
+                                    await self._gateway.broadcast_mission_status(detail)
+                                    return detail
+                            continue
 
                         async with session_factory() as session:
                             await self._events.record_event(
@@ -807,8 +1485,129 @@ class MissionService:
                                         await self._gateway.broadcast_mission_status(detail)
                                         return detail
 
-                                curr_x += step_dist * math.cos(curr_heading)
-                                curr_y += step_dist * math.sin(curr_heading)
+                                # Immediate obstacle check independent of Gemini/LLM availability
+                                active_obs = self._find_active_obstacle(
+                                    avoided_obstacle_keys
+                                )
+                                if active_obs is not None:
+                                    # 1. Immediately stop SCOUT01 ('X')
+                                    if hardware_connected or writer.armed:
+                                        await self._send_stop_and_report_fault_if_failed(
+                                            writer,
+                                            session_factory,
+                                            mission_id,
+                                            context=(
+                                                f"immediate obstacle stop on {task_id} ({active_obs['label']} at {active_obs['distance_m']}m)"
+                                            ),
+                                        )
+                                    else:
+                                        await writer.execute_step("X", 0.05, pause_s=0.05)
+
+                                    async with session_factory() as session:
+                                        await self._events.record_event(
+                                            session,
+                                            mission_id=mission_id,
+                                            category=EventCategoryEnum.SAFETY,
+                                            message=(
+                                                f"Obstacle '{active_obs['label']}' detected at {active_obs['distance_m']:.2f}m "
+                                                f"in frame '{active_obs['coordinate_frame']}' during {task_id} — SCOUT01 stopped ('X')."
+                                            ),
+                                        )
+
+                                    # 2. Allow ULTRON standing order / replanning to process and sync to SQLite
+                                    if hasattr(self._agent, "wait_for_replanning"):
+                                        await self._agent.wait_for_replanning(timeout=0.6)
+                                    async with session_factory() as session:
+                                        if hasattr(
+                                            self._agent,
+                                            "sync_event_intelligence_to_event_service",
+                                        ):
+                                            await self._agent.sync_event_intelligence_to_event_service(
+                                                session,
+                                                self._events,
+                                                mission_id=mission_id,
+                                                broadcast=True,
+                                            )
+                                            detail_replan = await self.get_mission(
+                                                session, mission_id
+                                            )
+                                            await self._gateway.broadcast_mission_status(
+                                                detail_replan
+                                            )
+
+                                    # 3. Evaluate available space from sensor geometry
+                                    avoid_cmd, avoid_reason, ev_ids = (
+                                        self._evaluate_sensor_avoidance_direction()
+                                    )
+                                    if avoid_cmd is None:
+                                        return await self._abort_blocked_mission(
+                                            session_factory,
+                                            writer,
+                                            mission_id,
+                                            task_id,
+                                            avoid_reason,
+                                            ev_ids,
+                                            curr_x,
+                                            curr_y,
+                                            hardware_connected,
+                                        )
+
+                                    # 4. Execute sensor-verified avoidance turn & bypass
+                                    ok_avoid, curr_x, curr_y, curr_heading = (
+                                        await self._execute_sensor_verified_avoidance(
+                                            session_factory,
+                                            writer,
+                                            mission_id,
+                                            task_id,
+                                            avoid_cmd,
+                                            avoid_reason,
+                                            ev_ids,
+                                            curr_x,
+                                            curr_y,
+                                            curr_heading,
+                                            hardware_connected,
+                                        )
+                                    )
+                                    avoided_obstacle_keys.update(active_obs["all_keys"])
+                                    avoided_obstacle_keys.update(
+                                        self._collect_all_current_obstacle_keys()
+                                    )
+                                    physical_avoidance_performed = True
+                                    if not ok_avoid:
+                                        async with session_factory() as session:
+                                            t_row = await session.get(Task, task_id)
+                                            if (
+                                                t_row is not None
+                                                and t_row.status == "IN_PROGRESS"
+                                            ):
+                                                t_row.status = "CANCELLED"
+                                                await session.commit()
+                                            detail = await self.get_mission(
+                                                session, mission_id
+                                            )
+                                            await self._gateway.broadcast_mission_status(
+                                                detail
+                                            )
+                                            return detail
+
+                                    # Check if ULTRON replanning superseded the current task
+                                    async with session_factory() as session:
+                                        t_row = await session.get(Task, task_id)
+                                        if t_row is not None and t_row.status == "CANCELLED":
+                                            task_superseded_by_replan = True
+                                    if task_superseded_by_replan:
+                                        break
+
+                                    # Otherwise resume forward movement on remaining ticks
+                                    if hardware_connected:
+                                        try:
+                                            await writer.send("W")
+                                        except Exception:
+                                            hardware_connected = False
+
+                                if not hardware_connected:
+                                    curr_x += step_dist * math.cos(curr_heading)
+                                    curr_y += step_dist * math.sin(curr_heading)
                                 await self._broadcast_scout_pose(
                                     session_factory,
                                     curr_x,
@@ -835,6 +1634,9 @@ class MissionService:
                                         detail = await self.get_mission(session, mission_id)
                                         await self._gateway.broadcast_mission_status(detail)
                                         return detail
+
+                            if task_superseded_by_replan:
+                                break
 
                             if hardware_connected or writer.armed:
                                 await self._send_stop_and_report_fault_if_failed(
@@ -915,10 +1717,34 @@ class MissionService:
                                 is_real=hardware_connected,
                             )
 
+                        # Sync any asynchronous ULTRON replanning that finished during this step
+                        async with session_factory() as session:
+                            if hasattr(
+                                self._agent, "sync_event_intelligence_to_event_service"
+                            ):
+                                ev_s, rt_s = (
+                                    await self._agent.sync_event_intelligence_to_event_service(
+                                        session,
+                                        self._events,
+                                        mission_id=mission_id,
+                                        broadcast=True,
+                                    )
+                                )
+                                if ev_s or rt_s:
+                                    detail_s = await self.get_mission(session, mission_id)
+                                    await self._gateway.broadcast_mission_status(detail_s)
+                            t_row = await session.get(Task, task_id)
+                            if t_row is not None and t_row.status == "CANCELLED":
+                                task_superseded_by_replan = True
+                                break
+
+                    if task_superseded_by_replan:
+                        continue
+
                     # Mark task COMPLETED and broadcast to dashboard
                     async with session_factory() as session:
                         t_row = await session.get(Task, task_id)
-                        if t_row is not None:
+                        if t_row is not None and t_row.status == "IN_PROGRESS":
                             t_row.status = "COMPLETED"
                             await session.commit()
                         detail = await self.get_mission(session, mission_id)
@@ -942,9 +1768,22 @@ class MissionService:
                 )
 
                 # Finalize mission as COMPLETED
+                is_sim_completion = bool(
+                    not hardware_connected and settings.hardware_lockout
+                )
                 async with session_factory() as session:
-                    return await self.complete_mission(session, mission_id)
+                    return await self.complete_mission(
+                        session,
+                        mission_id,
+                        is_simulated=is_sim_completion,
+                    )
             finally:
+                if control_simulator is not None and hasattr(
+                    control_simulator, "release_mission_executor_lease"
+                ):
+                    res_rel = control_simulator.release_mission_executor_lease()
+                    if asyncio.iscoroutine(res_rel):
+                        await res_rel
                 if owns_writer:
                     await writer.close()
 
@@ -2259,6 +3098,8 @@ class MissionService:
         self,
         session: AsyncSession,
         mission_id: str,
+        *,
+        is_simulated: bool = True,
     ) -> MissionDetailRead:
         """Complete a mission, finalize tasks, persist audit records & completion snapshots, and broadcast."""
         stmt = (
@@ -2281,7 +3122,7 @@ class MissionService:
                 priority=t.priority,
                 status=t.status,
                 execution_stage="ASSIGNED",
-                is_simulated=True,
+                is_simulated=is_simulated,
             )
             for t in sorted(mission_row.tasks, key=lambda item: (item.priority, item.id))
         ]
@@ -2293,8 +3134,10 @@ class MissionService:
         for task in mission_row.tasks:
             if task.status not in ("COMPLETED", "CANCELLED", "FAILED"):
                 task.status = "COMPLETED"
-            completed_task_ids.append(task.id)
+            if task.status == "COMPLETED":
+                completed_task_ids.append(task.id)
 
+        post_stage = "SIMULATED_COMPLETED" if is_simulated else "COMMAND_DISPATCHED"
         post_tasks = [
             SnapshotTaskState(
                 task_id=t.id,
@@ -2304,8 +3147,10 @@ class MissionService:
                 target=t.target,
                 priority=t.priority,
                 status=t.status,
-                execution_stage="SIMULATED_COMPLETED",
-                is_simulated=True,
+                execution_stage=(
+                    post_stage if t.status == "COMPLETED" else t.status
+                ),  # type: ignore[arg-type]
+                is_simulated=is_simulated,
             )
             for t in sorted(mission_row.tasks, key=lambda item: (item.priority, item.id))
         ]
@@ -2319,14 +3164,23 @@ class MissionService:
             commit=False,
             broadcast=False,
         )
+        trace_trigger = (
+            f"SIMULATED_MISSION_COMPLETION:{mission_id}"
+            if is_simulated
+            else f"MISSION_EXECUTION_COMPLETED:{mission_id}"
+        )
+        trace_rationale = (
+            f"[SIMULATED_ULTRON_STUB] All assigned tasks for mission {mission_id} "
+            f"('{mission_row.objective}') marked COMPLETED."
+            if is_simulated
+            else f"Physical SCOUT01 serial execution completed for mission {mission_id} "
+            f"('{mission_row.objective}')."
+        )
         trace_read = await self._events.record_reasoning_trace(
             session,
             mission_id=mission_id,
-            trigger=f"SIMULATED_MISSION_COMPLETION:{mission_id}",
-            rationale=(
-                f"[SIMULATED_ULTRON_STUB] All assigned tasks for mission {mission_id} "
-                f"('{mission_row.objective}') marked COMPLETED."
-            ),
+            trigger=trace_trigger,
+            rationale=trace_rationale,
             resulting_task_ids=completed_task_ids,
             timestamp=now + timedelta(milliseconds=1),
             commit=False,
@@ -2342,7 +3196,7 @@ class MissionService:
                 mission_id=mission_id,
                 timestamp=now.timestamp(),
                 trigger_type=SnapshotTriggerTypeEnum.TASK_STATE_TRANSITION,
-                trigger_reason=f"Before simulated completion of mission {mission_id}",
+                trigger_reason=f"Before completion of mission {mission_id}",
                 phase=SnapshotPhaseEnum.BEFORE,
                 associated_event_id=event_read.id,
                 task_states=pre_tasks,
@@ -2359,7 +3213,7 @@ class MissionService:
                 mission_id=mission_id,
                 timestamp=(now + timedelta(milliseconds=1)).timestamp(),
                 trigger_type=SnapshotTriggerTypeEnum.MISSION_COMPLETED,
-                trigger_reason=f"Simulated completion of mission {mission_id} ({len(completed_task_ids)} tasks finalized)",
+                trigger_reason=f"Completion of mission {mission_id} ({len(completed_task_ids)} tasks finalized)",
                 phase=SnapshotPhaseEnum.AFTER,
                 associated_event_id=event_read.id,
                 associated_trace_id=trace_read.id,
@@ -2370,8 +3224,12 @@ class MissionService:
                     event_type="MISSION_STATE_CHANGED",
                     event_priority="LOW",
                     event_source="mission_lifecycle",
-                    event_source_mode="simulated",
-                    planner_source="simulated_completion_helper",
+                    event_source_mode="simulated" if is_simulated else "physical",
+                    planner_source=(
+                        "simulated_completion_helper"
+                        if is_simulated
+                        else "physical_mission_executor"
+                    ),
                     validation_passed=True,
                     resulting_task_ids=tuple(completed_task_ids),
                     rationale=trace_read.rationale,
@@ -2394,7 +3252,7 @@ class MissionService:
                 sequence=99,
                 timestamp=(now + timedelta(milliseconds=1)).timestamp(),
                 trigger_type=SnapshotTriggerTypeEnum.MISSION_COMPLETED,
-                trigger_reason=f"Simulated completion of mission {mission_id}",
+                trigger_reason=f"Completion of mission {mission_id}",
                 phase=SnapshotPhaseEnum.AFTER,
                 associated_event_id=event_read.id,
                 associated_trace_id=trace_read.id,
@@ -2404,8 +3262,12 @@ class MissionService:
                     event_type="MISSION_STATE_CHANGED",
                     event_priority="LOW",
                     event_source="mission_lifecycle",
-                    event_source_mode="simulated",
-                    planner_source="simulated_completion_helper",
+                    event_source_mode="simulated" if is_simulated else "physical",
+                    planner_source=(
+                        "simulated_completion_helper"
+                        if is_simulated
+                        else "physical_mission_executor"
+                    ),
                     validation_passed=True,
                     resulting_task_ids=tuple(completed_task_ids),
                     rationale=trace_read.rationale,

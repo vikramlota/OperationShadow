@@ -136,35 +136,45 @@ async def ensure_phase3_schema_migrations(conn: AsyncConnection) -> None:
 
 
 async def seed_default_vehicles(session: AsyncSession) -> None:
-    """Idempotently seed SCOUT01 and reset stale CONNECTED states on cold boot."""
+    """Idempotently seed SCOUT01 and sync mode/connection with active configuration."""
+    from datetime import datetime, timezone
+
     result = await session.execute(
         select(Vehicle).where(Vehicle.id.in_(["SCOUT01"]))
     )
     existing_by_id = {v.id: v for v in result.scalars().all()}
+    target_mode = settings.default_vehicle_mode
+    settings.validate_requested_mode(target_mode)
+    is_real_mode = target_mode == "real" and not settings.hardware_lockout
 
     for spec in DEFAULT_VEHICLES:
         existing = existing_by_id.get(spec["id"])
         if existing is None:
-            mode = settings.default_vehicle_mode
-            settings.validate_requested_mode(mode)
             session.add(
                 Vehicle(
                     id=spec["id"],
                     vehicle_type=spec["vehicle_type"],
-                    status=spec["status"],
+                    status="IDLE",
                     battery=spec["battery"],
                     position_x=spec["position_x"],
                     position_y=spec["position_y"],
                     position_alt=spec["position_alt"],
-                    connection=spec["connection"],
-                    mode=mode,
-                    last_heartbeat=spec["last_heartbeat"],
+                    connection="CONNECTED" if is_real_mode else spec["connection"],
+                    mode=target_mode,
+                    last_heartbeat=datetime.now(timezone.utc) if is_real_mode else spec["last_heartbeat"],
                 )
             )
-        elif existing.connection == "CONNECTED":
-            existing.connection = "DISCONNECTED"
-            if existing.status in ("ACTIVE", "EXECUTING"):
-                existing.status = "IDLE"
+        else:
+            existing.mode = target_mode
+            if is_real_mode:
+                existing.connection = "CONNECTED"
+                existing.last_heartbeat = datetime.now(timezone.utc)
+                if existing.status in ("UNKNOWN", "DISCONNECTED"):
+                    existing.status = "IDLE"
+            elif existing.connection == "CONNECTED":
+                existing.connection = "DISCONNECTED"
+                if existing.status in ("ACTIVE", "EXECUTING"):
+                    existing.status = "IDLE"
 
     await session.flush()
 

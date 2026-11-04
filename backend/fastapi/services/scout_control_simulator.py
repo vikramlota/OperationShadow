@@ -26,6 +26,7 @@ class ScoutControlSimulator:
         self._command: ControlCommand = "X"
         self._clients: set[str] = set()
         self._movement_owner: str | None = None
+        self._mission_executor_active: bool = False
         self._last_update: datetime | None = None
         self._lease_deadline = 0.0
         self._watchdog: asyncio.Task[None] | None = None
@@ -34,6 +35,26 @@ class ScoutControlSimulator:
     @property
     def serial_writer(self) -> ScoutSerialWriter | None:
         return self._serial_writer
+
+    @property
+    def mission_executor_active(self) -> bool:
+        return self._mission_executor_active
+
+    async def acquire_mission_executor_lease(self) -> None:
+        """Reserve exclusive SCOUT01 control for the mission executor and clear any manual movement lease."""
+        async with self._lock:
+            self._mission_executor_active = True
+            self._command = "X"
+            self._movement_owner = None
+            self._lease_deadline = 0.0
+
+    async def release_mission_executor_lease(self) -> None:
+        """Release the mission executor lease after mission execution finishes."""
+        async with self._lock:
+            self._mission_executor_active = False
+            self._command = "X"
+            self._movement_owner = None
+            self._lease_deadline = 0.0
 
     async def start(self) -> None:
         if self._serial_writer is not None:
@@ -71,10 +92,16 @@ class ScoutControlSimulator:
         async with self._lock:
             if client_id not in self._clients:
                 return False
+            if (
+                self._serial_writer is not None
+                and self._serial_writer.armed
+                and not self._serial_writer.connected
+            ):
+                await self._serial_writer.ensure_connected()
             if command == "X":
                 await self._stop_locked(propagate_serial_error=True)
             else:
-                if self._movement_owner not in (None, client_id):
+                if self._mission_executor_active or self._movement_owner not in (None, client_id):
                     return False
                 try:
                     await self._send_serial(command)
@@ -91,6 +118,8 @@ class ScoutControlSimulator:
         async with self._lock:
             if client_id not in self._clients:
                 return False
+            if self._mission_executor_active:
+                return False
             if self._command != "X":
                 if self._movement_owner != client_id:
                     return False
@@ -105,6 +134,12 @@ class ScoutControlSimulator:
 
     async def status(self) -> dict[str, str | bool | None]:
         async with self._lock:
+            if (
+                self._serial_writer is not None
+                and self._serial_writer.armed
+                and not self._serial_writer.connected
+            ):
+                await self._serial_writer.ensure_connected()
             return {
                 "mode": (
                     "serial"

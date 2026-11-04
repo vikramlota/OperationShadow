@@ -186,6 +186,10 @@ class UltronLangGraphAgent(UltronAgentPort):
         try:
             from core.config import settings as _app_cfg
 
+            _default_real = (
+                getattr(_app_cfg, "default_vehicle_mode", "simulated") == "real"
+                and not bool(getattr(_app_cfg, "hardware_lockout", True))
+            )
             _lidar_enabled = bool(getattr(_app_cfg, "lidar_enabled", False))
             _lidar_topic = str(getattr(_app_cfg, "lidar_topic", "") or "")
             _lidar_msg_type = str(getattr(_app_cfg, "lidar_message_type", "") or "")
@@ -200,6 +204,7 @@ class UltronLangGraphAgent(UltronAgentPort):
             _lidar_max_r = float(getattr(_app_cfg, "lidar_max_range_m", 30.0))
             _lidar_stale = float(getattr(_app_cfg, "lidar_stale_after_seconds", 2.0))
         except Exception:
+            _default_real = False
             _lidar_enabled = False
             _lidar_topic = ""
             _lidar_msg_type = ""
@@ -211,6 +216,10 @@ class UltronLangGraphAgent(UltronAgentPort):
             _lidar_min_r = 0.05
             _lidar_max_r = 30.0
             _lidar_stale = 2.0
+
+        if _default_real:
+            self._world.vehicles["SCOUT01"].mode = UltronVehicleMode.REAL
+            self._world.vehicles["SCOUT01"].connection = UltronConnectionStatus.ONLINE
 
         self.camera_adapter = DepthCameraAdapter(
             enabled=True,
@@ -572,11 +581,25 @@ class UltronLangGraphAgent(UltronAgentPort):
             for h in self._world.environment.hazards:
                 if h.id == haz_id:
                     h.handled = True
-        leg_id = event.evidence_payload.get("object_entity_id")
+        leg_id = event.evidence_payload.get("object_entity_id") or event.evidence_payload.get("object_id")
+        obs_id_set = set(event.observation_ids)
+        for o in self._world.environment.objects:
+            if (leg_id and o.id == leg_id) or (obs_id_set and o.observation_id in obs_id_set):
+                o.handled = True
+
+    def _is_event_already_handled_by_world_model(self, event: UltronEvent) -> bool:
+        """Return True if the legacy ObjectEntity or TrackedObject for `event` was already handled in this batch."""
+        leg_id = event.evidence_payload.get("object_entity_id") or event.evidence_payload.get("object_id")
         if leg_id:
             for o in self._world.environment.objects:
-                if o.id == leg_id:
-                    o.handled = True
+                if o.id == leg_id and getattr(o, "handled", False):
+                    return True
+        if event.tracked_object_ids and all(
+            getattr(self._world.environment.tracked_objects.get(tid), "handled", False)
+            for tid in event.tracked_object_ids
+        ):
+            return True
+        return False
 
     def _record_triage_decision_trace(
         self,
@@ -910,7 +933,16 @@ class UltronLangGraphAgent(UltronAgentPort):
                     # Preconditions or required evidence not met for Standing Order -> route to LLM Triage
                     self._enqueue_for_triage(event)
             elif target == EventRouteTargetEnum.LLM_TRIAGE:
-                self._enqueue_for_triage(event)
+                if self._is_event_already_handled_by_world_model(event):
+                    self._replan_coalesced_updates_count += 1
+                    if (
+                        self._pending_replan is not None
+                        and self._pending_replan.mission_epoch == self._mission_epoch
+                    ):
+                        self._pending_replan.coalesced_count += 1
+                        self._pending_replan.last_updated_at = now_ts
+                else:
+                    self._enqueue_for_triage(event)
             elif target == EventRouteTargetEnum.LOG_ONLY:
                 self._mark_event_entities_handled(event)
 
@@ -929,11 +961,20 @@ class UltronLangGraphAgent(UltronAgentPort):
             elif (
                 not out.accepted
                 and out.status == "suppressed_duplicate"
-                and self._pending_replan is not None
-                and self._pending_replan.mission_epoch == self._mission_epoch
+                and (
+                    (
+                        self._pending_replan is not None
+                        and self._pending_replan.mission_epoch == self._mission_epoch
+                    )
+                    or self.has_active_replan
+                )
             ):
-                self._pending_replan.coalesced_count += 1
-                self._pending_replan.last_updated_at = now_ts
+                if (
+                    self._pending_replan is not None
+                    and self._pending_replan.mission_epoch == self._mission_epoch
+                ):
+                    self._pending_replan.coalesced_count += 1
+                    self._pending_replan.last_updated_at = now_ts
                 self._replan_coalesced_updates_count += 1
 
         self._dispatch_routed_events(now_ts=now_ts)
@@ -1197,13 +1238,23 @@ class UltronLangGraphAgent(UltronAgentPort):
                     )
 
                 if new_plan is not None:
-                    # Mark previous ASSIGNED tasks as CANCELLED / superseded and add new replanned tasks
-                    prev_completed_or_failed = [
-                        t
-                        for t in self._active_task_specs
-                        if t.status in ("COMPLETED", "FAILED", "CANCELLED")
-                    ]
-                    replanned_specs: list[SnapshotTaskState] = list(prev_completed_or_failed)
+                    # Mark previous ASSIGNED/IN_PROGRESS tasks as CANCELLED / superseded and add new replanned tasks
+                    new_plan_task_ids = {t_item.id for t_item in new_plan.tasks}
+                    replanned_specs: list[SnapshotTaskState] = []
+                    for prev_t in self._active_task_specs:
+                        if prev_t.task_id in new_plan_task_ids:
+                            continue
+                        if prev_t.status in ("COMPLETED", "FAILED", "CANCELLED"):
+                            replanned_specs.append(prev_t)
+                        else:
+                            replanned_specs.append(
+                                prev_t.model_copy(
+                                    update={
+                                        "status": "CANCELLED",
+                                        "execution_stage": "CANCELLED",
+                                    }
+                                )
+                            )
                     for idx, t_item in enumerate(new_plan.tasks, start=1):
                         veh_str = (
                             t_item.vehicle.value
@@ -1393,6 +1444,7 @@ class UltronLangGraphAgent(UltronAgentPort):
             persisted_traces.append(rt_read)
 
         # 3. Sync replanned task rows into SQLite `tasks` table so `resulting_task_ids` are persisted
+        tasks_mutated = False
         if self._world.mission.id == target_mission_id and self._active_task_specs:
             for t_spec in self._active_task_specs:
                 existing_task = await session.get(Task, t_spec.task_id)
@@ -1409,6 +1461,22 @@ class UltronLangGraphAgent(UltronAgentPort):
                             status=t_spec.status,
                         )
                     )
+                    tasks_mutated = True
+                elif existing_task.mission_id != target_mission_id:
+                    existing_task.mission_id = target_mission_id
+                    existing_task.vehicle_id = t_spec.vehicle_id
+                    existing_task.type = t_spec.task_type
+                    existing_task.area = t_spec.area
+                    existing_task.target = t_spec.target
+                    existing_task.priority = t_spec.priority
+                    existing_task.status = t_spec.status
+                    tasks_mutated = True
+                elif (
+                    t_spec.status == "CANCELLED"
+                    and existing_task.status in ("ASSIGNED", "IN_PROGRESS")
+                ):
+                    existing_task.status = "CANCELLED"
+                    tasks_mutated = True
                 await session.flush()
 
         # 4. Sync immutable MissionMemorySnapshot records to SQLite (`mission_snapshots`)
@@ -1430,7 +1498,7 @@ class UltronLangGraphAgent(UltronAgentPort):
                     self._snapshot_persistence_errors.append(err_str)
                     logger.error(err_str)
 
-        if persisted_events or persisted_traces or snaps_persisted > 0:
+        if persisted_events or persisted_traces or snaps_persisted > 0 or tasks_mutated:
             await session.commit()
 
         return persisted_events, persisted_traces
