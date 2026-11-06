@@ -40,6 +40,8 @@ export default function App({
               reachable: health.status === "ok",
               hardwareLockout: health.hardware_lockout,
               ultronIsStub: health.ultron_is_stub,
+              defaultVehicleMode:
+                health.default_vehicle_mode === "real" ? "real" : "simulated",
             },
           });
         }
@@ -65,7 +67,7 @@ export default function App({
   const scoutDet = state.detections.SCOUT01;
 
   useEffect(() => {
-    if (!scout.lastHeartbeat) {
+    if (!scout.lastHeartbeat || scout.mode === "real") {
       return;
     }
     const timer = setInterval(() => {
@@ -78,7 +80,7 @@ export default function App({
       }
     }, 500);
     return () => clearInterval(timer);
-  }, [scout.lastHeartbeat, scout.isStale, dispatch]);
+  }, [scout.lastHeartbeat, scout.isStale, scout.mode, dispatch]);
   const allSimulated = scout.mode === "simulated";
   const hasLiveRosPerception =
     scoutDet.telemetrySource === "rosbridge" ||

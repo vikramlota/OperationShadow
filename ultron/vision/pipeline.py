@@ -306,7 +306,43 @@ class DepthCameraAdapter:
                     continue
 
                 is_hazard = cls_clean.lower() in {"fire", "smoke", "hazard", "gas_leak", "thermal_anomaly"}
-                is_obstacle = cls_clean.lower() in {"chair", "bench", "box", "obstacle", "wall", "barrier", "table"}
+                is_obstacle = cls_clean.lower() in {
+                    "chair",
+                    "bench",
+                    "box",
+                    "obstacle",
+                    "lidar_obstacle",
+                    "wall",
+                    "barrier",
+                    "table",
+                    "dining table",
+                    "diningtable",
+                    "couch",
+                    "sofa",
+                    "potted plant",
+                    "pottedplant",
+                    "bed",
+                    "tv",
+                    "tvmonitor",
+                    "laptop",
+                    "backpack",
+                    "suitcase",
+                    "handbag",
+                    "bottle",
+                    "cup",
+                    "trash can",
+                    "cone",
+                    "pillar",
+                    "column",
+                    "door",
+                    "cabinet",
+                    "refrigerator",
+                    "person",
+                    "bicycle",
+                    "dog",
+                    "cat",
+                    "cart",
+                }
 
                 obs = SensorObservation(
                     observation_id=f"OBS-CAM-{uuid.uuid4().hex[:8].upper()}",

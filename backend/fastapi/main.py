@@ -170,9 +170,25 @@ def create_app(
         else:
             logger.info("ROSBridge client disabled by SHADOW_ROSBRIDGE_ENABLED=false.")
 
+        mp_detector = None
+        try:
+            from services.mediapipe_opencv_obstacle_detector import (
+                get_mediapipe_opencv_detector,
+            )
+
+            mp_detector = get_mediapipe_opencv_detector()
+            mp_detector.start_background_loop(
+                agent=active_mission_svc.agent,
+                perception_svc=active_perception_svc,
+            )
+        except Exception:
+            logger.exception("MediaPipe + OpenCV obstacle detector failed to start.")
+
         try:
             yield
         finally:
+            if mp_detector is not None:
+                await mp_detector.stop()
             await active_scout_control_simulator.shutdown()
             await active_perception_svc.stop()
             if rosbridge:

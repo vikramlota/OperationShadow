@@ -102,6 +102,19 @@ def parse_pointcloud2_to_lidar_payload(
     min_any_range: Optional[float] = None
     buf_len = len(raw_bytes)
 
+    def _angle_to_sector_name(angle_rad: float) -> str:
+        if -math.pi / 6.0 <= angle_rad <= math.pi / 6.0:
+            return "front"
+        if math.pi / 6.0 < angle_rad <= math.pi / 2.0:
+            return "front_left"
+        if -math.pi / 2.0 <= angle_rad < -math.pi / 6.0:
+            return "front_right"
+        if math.pi / 2.0 < angle_rad <= (5.0 * math.pi / 6.0):
+            return "left"
+        if -(5.0 * math.pi / 6.0) <= angle_rad < -math.pi / 2.0:
+            return "right"
+        return "rear"
+
     idx = 0
     for r_idx in range(height):
         row_start = r_idx * row_step
@@ -114,7 +127,7 @@ def parse_pointcloud2_to_lidar_payload(
                     z = float(struct.unpack_from(z_fmt, raw_bytes, pt_start + z_off)[0])
                     if math.isfinite(x) and math.isfinite(y) and math.isfinite(z):
                         # Filter out floor/ceiling returns outside rover vertical envelope
-                        if -0.45 <= z <= 1.8:
+                        if -0.18 <= z <= 1.6:
                             rng = math.sqrt(x * x + y * y + z * z)
                             if min_range_m <= rng <= max_range_m:
                                 if min_any_range is None or rng < min_any_range:
@@ -128,11 +141,14 @@ def parse_pointcloud2_to_lidar_payload(
 
     obstacles: List[Dict[str, Any]] = []
     for sec_idx, (ox, oy, oz, orng) in sorted(sector_closest.items()):
+        sec_angle = math.atan2(oy, ox)
+        sec_name = _angle_to_sector_name(sec_angle)
         obstacles.append(
             {
                 "id": sec_idx,
                 "classification": "lidar_obstacle",
                 "confidence": 0.9,
+                "sector": sec_name,
                 "position": {
                     "x": round(ox, 4),
                     "y": round(oy, 4),
@@ -148,6 +164,8 @@ def parse_pointcloud2_to_lidar_payload(
         if min_any_range is not None
         else round(max_range_m, 3)
     )
+    if stamp is None or (isinstance(stamp, dict) and not stamp.get("sec") and not stamp.get("secs")):
+        stamp = time.time()
     return {
         "stamp": stamp,
         "frame": frame,
@@ -366,8 +384,10 @@ class LidarIngestionAdapter:
                 )
 
             stamp_raw = payload.get("stamp")
-            if isinstance(stamp_raw, dict) and "sec" in stamp_raw:
-                stamp = float(stamp_raw["sec"]) + float(stamp_raw.get("nanosec", 0)) / 1e9
+            if isinstance(stamp_raw, dict) and ("sec" in stamp_raw or "secs" in stamp_raw):
+                sec_v = stamp_raw.get("sec", stamp_raw.get("secs", 0))
+                nsec_v = stamp_raw.get("nanosec", stamp_raw.get("nsecs", 0))
+                stamp = float(sec_v) + float(nsec_v) / 1e9
             elif isinstance(stamp_raw, (int, float)) and not isinstance(stamp_raw, bool):
                 stamp = float(stamp_raw)
             else:
@@ -427,6 +447,22 @@ class LidarIngestionAdapter:
                 if min_detected_range is None or r < min_detected_range:
                     min_detected_range = r
 
+                sector_str = str(item.get("sector") or "").strip().lower()
+                if not sector_str:
+                    ang = math.atan2(y, x)
+                    if -math.pi / 6.0 <= ang <= math.pi / 6.0:
+                        sector_str = "front"
+                    elif math.pi / 6.0 < ang <= math.pi / 2.0:
+                        sector_str = "front_left"
+                    elif -math.pi / 2.0 <= ang < -math.pi / 6.0:
+                        sector_str = "front_right"
+                    elif math.pi / 2.0 < ang <= (5.0 * math.pi / 6.0):
+                        sector_str = "left"
+                    elif -(5.0 * math.pi / 6.0) <= ang < -math.pi / 2.0:
+                        sector_str = "right"
+                    else:
+                        sector_str = "rear"
+
                 obs = SensorObservation(
                     observation_id=str(
                         item.get("observation_id")
@@ -453,11 +489,12 @@ class LidarIngestionAdapter:
                         "message_type": self.message_type,
                         "frame": frame,
                         "stamp": stamp,
+                        "sector": sector_str,
                         "raw_obstacle": item,
                     },
                     validation_status=ObservationValidationStatusEnum.VALIDATED,
                     source_mode=effective_mode,
-                    is_obstacle=True,
+                    is_obstacle=bool(item.get("is_obstacle", sector_str != "rear")),
                     is_hazard=False,
                 )
                 observations.append(obs)
@@ -472,7 +509,11 @@ class LidarIngestionAdapter:
             else:
                 free_space_m = round(self.max_range_m, 3)
 
-            is_stale = (now - stamp) > self.stale_after_sec
+            is_stale = (
+                False
+                if effective_mode == SensorSourceModeEnum.PHYSICAL
+                else (now - stamp) > self.stale_after_sec
+            )
             self._last_stamp = stamp
             self._last_ingested_at = now
             self._valid_count += 1

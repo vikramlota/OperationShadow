@@ -190,7 +190,7 @@ class RosBridgeClient:
             return False
 
         topic = msg.get("topic")
-        if self._lidar_enabled and topic == self._lidar_topic:
+        if self._lidar_enabled and topic in {self._lidar_topic, "/cloud_registered"}:
             msg_inner = msg.get("msg")
             if not isinstance(msg_inner, dict):
                 self.invalid_message_count += 1
@@ -298,22 +298,26 @@ class RosBridgeClient:
                     logger.info("Subscribed to %s (%s)", self._topic, self._message_type)
 
                     if self._lidar_enabled and self._lidar_topic:
-                        await ws.send(
-                            json.dumps(
-                                {
-                                    "op": "subscribe",
-                                    "topic": self._lidar_topic,
-                                    "type": self._lidar_message_type,
-                                    "throttle_rate": 500,  # max 2 Hz
-                                    "queue_length": 1,
-                                }
+                        lidar_topics = [self._lidar_topic]
+                        if "/cloud_registered" not in lidar_topics:
+                            lidar_topics.append("/cloud_registered")
+                        for l_top in lidar_topics:
+                            await ws.send(
+                                json.dumps(
+                                    {
+                                        "op": "subscribe",
+                                        "topic": l_top,
+                                        "type": self._lidar_message_type,
+                                        "throttle_rate": 500,  # max 2 Hz
+                                        "queue_length": 1,
+                                    }
+                                )
                             )
-                        )
-                        logger.info(
-                            "Subscribed to LiDAR %s (%s)",
-                            self._lidar_topic,
-                            self._lidar_message_type,
-                        )
+                            logger.info(
+                                "Subscribed to LiDAR %s (%s)",
+                                l_top,
+                                self._lidar_message_type,
+                            )
 
                     async for raw in ws:
                         if not self._running:
@@ -652,14 +656,25 @@ async def start_rosbridge(
 def _class_to_obs_type(cls: str) -> str:
     """Map OAK-D YOLO class names to ULTRON observation event types."""
     mapping = {
-        "person": "target_detected",
+        "person": "obstacle_detected",
         "fire": "hazard_detected",
         "smoke": "hazard_detected",
-        "box": "target_detected",
-        "backpack": "target_detected",
-        "suitcase": "target_detected",
+        "box": "obstacle_detected",
+        "backpack": "obstacle_detected",
+        "suitcase": "obstacle_detected",
         "chair": "obstacle_detected",
         "bench": "obstacle_detected",
-        "bottle": "target_detected",
+        "table": "obstacle_detected",
+        "dining table": "obstacle_detected",
+        "couch": "obstacle_detected",
+        "sofa": "obstacle_detected",
+        "potted plant": "obstacle_detected",
+        "bed": "obstacle_detected",
+        "tv": "obstacle_detected",
+        "laptop": "obstacle_detected",
+        "wall": "obstacle_detected",
+        "barrier": "obstacle_detected",
+        "obstacle": "obstacle_detected",
+        "bottle": "obstacle_detected",
     }
-    return mapping.get(cls.lower(), "target_detected")
+    return mapping.get(cls.lower(), "obstacle_detected")

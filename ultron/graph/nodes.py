@@ -130,13 +130,15 @@ def node_assign(state: UltronState) -> UltronStateUpdate:
         if len(world.environment.decision_traces) > 100:
             world.environment.decision_traces = world.environment.decision_traces[-100:]
 
-    # Mark active hazards/objects/tracked_objects as handled so they do not continuously retrigger replanning
-    for h in world.environment.hazards:
-        h.handled = True
-    for o in world.environment.objects:
-        o.handled = True
-    for tobj in world.environment.tracked_objects.values():
-        tobj.handled = True
+    # Mark active hazards/objects/tracked_objects as handled only after an environmental replan
+    # (never during initial mission creation so pre-existing obstacles in front of the rover still trigger avoidance & replanning)
+    if state.get("trigger_rationale"):
+        for h in world.environment.hazards:
+            h.handled = True
+        for o in world.environment.objects:
+            o.handled = True
+        for tobj in world.environment.tracked_objects.values():
+            tobj.handled = True
 
     return {"world": world}
 

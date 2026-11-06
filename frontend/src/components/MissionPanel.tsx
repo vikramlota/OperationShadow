@@ -10,7 +10,7 @@ import {
 import { useDashboardStore } from "../state/store";
 
 const HACKATHON_DEMO_OBJECTIVE =
-  "Simulated SCOUT01: perform one short sweep of Sector Alpha, identify visible obstacles, and report findings.";
+  "Navigate to the destination, detect obstacles, avoid them and continue towards the destination.";
 
 export function MissionPanel(): React.JSX.Element {
   const { state, dispatch } = useDashboardStore();
@@ -18,6 +18,8 @@ export function MissionPanel(): React.JSX.Element {
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [isExecuting, setIsExecuting] = useState<boolean>(false);
   const [isCompleting, setIsCompleting] = useState<boolean>(false);
+  const [awaitingApproval, setAwaitingApproval] = useState<boolean>(false);
+  const [planRationale, setPlanRationale] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
@@ -47,8 +49,10 @@ export function MissionPanel(): React.JSX.Element {
       const detail = await fetchMission(created.mission_id);
       dispatch({ type: "SET_MISSION_DETAIL", payload: detail });
       setObjectiveInput("");
+      setAwaitingApproval(true);
+      setPlanRationale(created.rationale ?? null);
       setSuccessMsg(
-        `Mission ${detail.id} dispatched (${detail.tasks.length} tasks assigned).`,
+        `Mission ${detail.id} dispatched (${detail.tasks.length} tasks assigned) — awaiting operator approval. Click START MISSION to execute on SCOUT01.`,
       );
     } catch (err) {
       setErrorMsg(
@@ -65,13 +69,20 @@ export function MissionPanel(): React.JSX.Element {
     }
     setErrorMsg(null);
     setSuccessMsg(null);
+    setAwaitingApproval(false);
     setIsExecuting(true);
     try {
       const executed = await executeMission(state.activeMissionId);
       dispatch({ type: "SET_MISSION_DETAIL", payload: executed });
-      setSuccessMsg(
-        `Mission ${executed.id} executed on SCOUT01 and marked ${executed.status}.`,
-      );
+      if (executed.status === "FAILED" || executed.status === "ABORTED") {
+        setErrorMsg(
+          `Mission ${executed.id} halted on SCOUT01 (${executed.status}) — check safety/obstacle telemetry.`,
+        );
+      } else {
+        setSuccessMsg(
+          `Mission ${executed.id} executed on SCOUT01 and marked ${executed.status}.`,
+        );
+      }
     } catch (err) {
       setErrorMsg(
         err instanceof Error ? err.message : "Mission execution on SCOUT01 failed.",
@@ -87,6 +98,7 @@ export function MissionPanel(): React.JSX.Element {
     }
     setErrorMsg(null);
     setSuccessMsg(null);
+    setAwaitingApproval(false);
     setIsCompleting(true);
     try {
       const completed = await completeMission(state.activeMissionId);
@@ -134,6 +146,10 @@ export function MissionPanel(): React.JSX.Element {
       missionReport.unresolved_items.unverified_sensor_signals.length +
       missionReport.unresolved_items.unknown_outcomes.length
     : 0;
+
+  const hasAssignedTasksOnly =
+    state.missionTasks.length > 0 &&
+    state.missionTasks.every((t) => t.status === "ASSIGNED");
 
   return (
     <section className="panel" aria-label="Mission Panel">
@@ -193,19 +209,19 @@ export function MissionPanel(): React.JSX.Element {
               id="mission-objective-input"
               type="text"
               className="input"
-              placeholder="e.g. Sweep Sector Alpha & report hazards"
+              placeholder="e.g. Navigate to the destination, detect obstacles, avoid them..."
               value={objectiveInput}
               onChange={(e) => setObjectiveInput(e.target.value)}
-              disabled={isSubmitting}
+              disabled={isSubmitting || isExecuting}
             />
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={isSubmitting}
+              disabled={isSubmitting || isExecuting}
               aria-label="Submit Mission"
               style={{ whiteSpace: "nowrap", padding: "6px 12px" }}
             >
-              {isSubmitting ? "DISPATCHING..." : "DISPATCH"}
+              {isSubmitting ? "PLANNING..." : "DISPATCH"}
             </button>
           </div>
         </form>
@@ -237,10 +253,16 @@ export function MissionPanel(): React.JSX.Element {
                 color:
                   state.missionStatus === "ACTIVE"
                     ? "var(--marker-scout)"
-                    : undefined,
+                    : state.missionStatus === "FAILED"
+                      ? "#E04040"
+                      : undefined,
               }}
             >
-              {state.missionStatus}
+              {isExecuting
+                ? "EXECUTING ON SCOUT01"
+                : awaitingApproval && state.missionStatus === "ACTIVE" && hasAssignedTasksOnly
+                  ? "AWAITING APPROVAL"
+                  : state.missionStatus}
             </div>
           </div>
         </div>
@@ -256,16 +278,34 @@ export function MissionPanel(): React.JSX.Element {
                 fontSize: "10px",
                 color: "var(--text-secondary)",
                 lineHeight: 1.4,
+                borderLeft:
+                  awaitingApproval && hasAssignedTasksOnly
+                    ? "3px solid var(--marker-scout)"
+                    : undefined,
               }}
             >
               {state.hardwareLockout
                 ? "ULTRON PLANNING + SAFETY VALIDATION RUN ON DISPATCH // SIMULATED ONLY"
-                : "ULTRON PLANNING + SAFETY VALIDATION // SUPERVISED SERIAL DISPATCH ON SCOUT01"}
+                : awaitingApproval && hasAssignedTasksOnly
+                  ? "ULTRON PLAN READY // REVIEW TASKS BELOW & APPROVE TO START MISSION ON SCOUT01"
+                  : "ULTRON PLANNING + SAFETY VALIDATION // SUPERVISED SERIAL DISPATCH ON SCOUT01"}
+              {planRationale && (
+                <div
+                  data-testid="mission-plan-rationale"
+                  style={{
+                    marginTop: "4px",
+                    color: "var(--text-primary)",
+                    fontSize: "10px",
+                  }}
+                >
+                  <strong>PLAN RATIONALE:</strong> {planRationale}
+                </div>
+              )}
             </div>
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "1fr 1fr",
+                gridTemplateColumns: state.hardwareLockout ? "1fr 1fr" : "1fr",
                 gap: "6px",
               }}
             >
@@ -277,18 +317,22 @@ export function MissionPanel(): React.JSX.Element {
                 onClick={() => void handleExecuteMission()}
                 aria-label="Execute Mission on SCOUT01"
               >
-                {isExecuting ? "EXECUTING..." : "EXECUTE ON SCOUT01"}
+                {isExecuting
+                  ? "EXECUTING MISSION ON SCOUT01..."
+                  : "START MISSION (EXECUTE ON SCOUT01)"}
               </button>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                style={{ fontSize: "10px", padding: "6px 8px", width: "100%" }}
-                disabled={isCompleting || isExecuting}
-                onClick={() => void handleCompleteMission()}
-                aria-label="Complete Simulated Mission"
-              >
-                {isCompleting ? "COMPLETING..." : "COMPLETE SIMULATED"}
-              </button>
+              {state.hardwareLockout && (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ fontSize: "10px", padding: "6px 8px", width: "100%" }}
+                  disabled={isCompleting || isExecuting}
+                  onClick={() => void handleCompleteMission()}
+                  aria-label="Complete Simulated Mission"
+                >
+                  {isCompleting ? "COMPLETING..." : "COMPLETE SIMULATED"}
+                </button>
+              )}
             </div>
           </div>
         )}

@@ -1001,6 +1001,48 @@ class UltronLangGraphAgent(UltronAgentPort):
 
         return outcomes
 
+    def ensure_obstacle_replan_triggered(
+        self,
+        active_obs: dict[str, Any],
+    ) -> None:
+        """Ensure an active obstacle encountered during physical mission execution triggers ULTRON replanning."""
+        if (
+            self._emergency_stopped
+            or self._world.mission.status != UltronMissionStatus.IN_PROGRESS
+            or self._active_plan is None
+        ):
+            return
+
+        if self._pending_replan is not None or self.has_active_replan:
+            return
+
+        obs_key = str(active_obs.get("key", ""))
+        all_keys = {str(k) for k in active_obs.get("all_keys", set())}
+        if obs_key:
+            all_keys.add(obs_key)
+
+        for oid, tobj in self._world.environment.tracked_objects.items():
+            if oid in all_keys or any(
+                cid in all_keys for cid in getattr(tobj, "contributing_observation_ids", [])
+            ):
+                tobj.handled = False
+                tobj.is_obstacle = True
+
+        now_ts = time.time()
+        outcomes = self._route_and_schedule_world_events(now_ts=now_ts)
+        if (
+            not any(o.accepted for o in outcomes)
+            and self._pending_replan is None
+            and not self.has_active_replan
+        ):
+            # Clear dedup/cooldown if this obstacle was previously seen while idle before movement started
+            self.event_router.clear()
+            self.standing_orders.reset_execution_history()
+            for oid, tobj in self._world.environment.tracked_objects.items():
+                if oid in all_keys or getattr(tobj, "is_obstacle", False):
+                    tobj.handled = False
+            self._route_and_schedule_world_events(now_ts=now_ts)
+
     def _schedule_or_coalesce_replan(
         self,
         *,
@@ -2031,9 +2073,37 @@ class UltronLangGraphAgent(UltronAgentPort):
                 "bench",
                 "box",
                 "obstacle",
+                "lidar_obstacle",
                 "wall",
                 "barrier",
                 "table",
+                "dining table",
+                "diningtable",
+                "couch",
+                "sofa",
+                "potted plant",
+                "pottedplant",
+                "bed",
+                "tv",
+                "tvmonitor",
+                "laptop",
+                "backpack",
+                "suitcase",
+                "handbag",
+                "bottle",
+                "cup",
+                "trash can",
+                "cone",
+                "pillar",
+                "column",
+                "door",
+                "cabinet",
+                "refrigerator",
+                "person",
+                "bicycle",
+                "dog",
+                "cat",
+                "cart",
             }
 
             sensor_obs = SensorObservation(
@@ -2231,8 +2301,37 @@ class UltronLangGraphAgent(UltronAgentPort):
                 "bench",
                 "box",
                 "obstacle",
+                "lidar_obstacle",
                 "wall",
+                "barrier",
                 "table",
+                "dining table",
+                "diningtable",
+                "couch",
+                "sofa",
+                "potted plant",
+                "pottedplant",
+                "bed",
+                "tv",
+                "tvmonitor",
+                "laptop",
+                "backpack",
+                "suitcase",
+                "handbag",
+                "bottle",
+                "cup",
+                "trash can",
+                "cone",
+                "pillar",
+                "column",
+                "door",
+                "cabinet",
+                "refrigerator",
+                "person",
+                "bicycle",
+                "dog",
+                "cat",
+                "cart",
             }
             sensor_obs = SensorObservation(
                 observation_id=observation.observation_id,

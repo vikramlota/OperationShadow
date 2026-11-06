@@ -578,8 +578,33 @@ class MissionService:
             "wall",
             "barrier",
             "table",
+            "dining table",
+            "diningtable",
+            "couch",
+            "sofa",
+            "potted plant",
+            "pottedplant",
+            "bed",
+            "tv",
+            "tvmonitor",
+            "laptop",
+            "backpack",
+            "suitcase",
+            "handbag",
+            "bottle",
+            "cup",
+            "trash can",
             "cone",
+            "pillar",
+            "column",
+            "door",
+            "cabinet",
+            "refrigerator",
             "person",
+            "bicycle",
+            "dog",
+            "cat",
+            "cart",
         }
 
         for oid, obj in env.tracked_objects.items():
@@ -601,10 +626,16 @@ class MissionService:
                 continue
 
             pos = obj.position
+            frame_lower = str(obj.coordinate_frame).lower()
+            # For 360° LiDAR / FLU frames, ignore points behind the rover or far outside the forward corridor
+            if "lidar" in frame_lower or getattr(obj, "last_known_source", "") == "lidar":
+                if float(pos.x) < -0.05 or abs(float(pos.y)) > 0.70:
+                    continue
+
             rng = getattr(pos, "range_m", None)
             if rng is not None and float(rng) > 0.0:
                 dist = float(rng)
-            elif "optical" in str(obj.coordinate_frame).lower() and float(pos.z) > 0.0:
+            elif "optical" in frame_lower and float(pos.z) > 0.0:
                 dist = float(pos.z)
             else:
                 dist = math.hypot(float(pos.x), float(pos.y))
@@ -640,11 +671,21 @@ class MissionService:
             if not is_obs:
                 continue
 
+            raw_ref = obs.raw_reference if isinstance(obs.raw_reference, dict) else {}
+            sector = str(raw_ref.get("sector", "")).lower()
+            if sector in ("rear", "left", "right"):
+                continue
+
             pos = obs.position
+            frame_lower = str(obs.coordinate_frame).lower()
+            if "lidar" in frame_lower or str(getattr(obs.sensor_type, "value", obs.sensor_type)).lower() == "lidar":
+                if float(pos.x) < -0.05 or abs(float(pos.y)) > 0.70:
+                    continue
+
             rng = getattr(pos, "range_m", None)
             if rng is not None and float(rng) > 0.0:
                 dist = float(rng)
-            elif "optical" in str(obs.coordinate_frame).lower() and float(pos.z) > 0.0:
+            elif "optical" in frame_lower and float(pos.z) > 0.0:
                 dist = float(pos.z)
             else:
                 dist = math.hypot(float(pos.x), float(pos.y))
@@ -729,8 +770,33 @@ class MissionService:
             "wall",
             "barrier",
             "table",
+            "dining table",
+            "diningtable",
+            "couch",
+            "sofa",
+            "potted plant",
+            "pottedplant",
+            "bed",
+            "tv",
+            "tvmonitor",
+            "laptop",
+            "backpack",
+            "suitcase",
+            "handbag",
+            "bottle",
+            "cup",
+            "trash can",
             "cone",
+            "pillar",
+            "column",
+            "door",
+            "cabinet",
+            "refrigerator",
             "person",
+            "bicycle",
+            "dog",
+            "cat",
+            "cart",
         }
 
         evidence_ids: list[str] = []
@@ -738,6 +804,8 @@ class MissionService:
         left_blocked = False
         right_blocked = False
         center_blocked = False
+        left_min_dist = float("inf")
+        right_min_dist = float("inf")
 
         # 1. Inspect active tracked objects
         for oid, obj in env.tracked_objects.items():
@@ -764,13 +832,17 @@ class MissionService:
                 )
 
             pos = obj.position
+            frame_lower = str(obj.coordinate_frame).lower()
+            if ("lidar" in frame_lower or getattr(obj, "last_known_source", "") == "lidar") and float(pos.x) < -0.10:
+                continue
+
             rng = getattr(pos, "range_m", None)
             dist = (
                 float(rng)
                 if (rng is not None and float(rng) > 0.0)
                 else (
                     float(pos.z)
-                    if "optical" in str(obj.coordinate_frame).lower()
+                    if "optical" in frame_lower
                     and float(pos.z) > 0.0
                     else math.hypot(float(pos.x), float(pos.y))
                 )
@@ -778,7 +850,6 @@ class MissionService:
             if dist > 2.5:
                 continue
 
-            frame_lower = str(obj.coordinate_frame).lower()
             if "optical" in frame_lower:
                 # Optical frame: +X is right, -X is left
                 lat_right = float(pos.x)
@@ -793,9 +864,13 @@ class MissionService:
                     evidence_ids.append(str(cid))
 
             if lat_right < -0.08:
-                left_blocked = True
+                left_min_dist = min(left_min_dist, dist)
+                if dist <= 1.25:
+                    left_blocked = True
             elif lat_right > 0.08:
-                right_blocked = True
+                right_min_dist = min(right_min_dist, dist)
+                if dist <= 1.25:
+                    right_blocked = True
             else:
                 center_blocked = True
 
@@ -821,14 +896,23 @@ class MissionService:
                     [obs.observation_id],
                 )
 
+            raw_ref = obs.raw_reference if isinstance(obs.raw_reference, dict) else {}
+            sector = str(raw_ref.get("sector", "")).lower()
+            if sector == "rear":
+                continue
+
             pos = obs.position
+            frame_lower = str(obs.coordinate_frame).lower()
+            if ("lidar" in frame_lower or str(getattr(obs.sensor_type, "value", obs.sensor_type)).lower() == "lidar") and float(pos.x) < -0.10:
+                continue
+
             rng = getattr(pos, "range_m", None)
             dist = (
                 float(rng)
                 if (rng is not None and float(rng) > 0.0)
                 else (
                     float(pos.z)
-                    if "optical" in str(obs.coordinate_frame).lower()
+                    if "optical" in frame_lower
                     and float(pos.z) > 0.0
                     else math.hypot(float(pos.x), float(pos.y))
                 )
@@ -836,9 +920,6 @@ class MissionService:
             if dist > 2.5:
                 continue
 
-            raw_ref = obs.raw_reference if isinstance(obs.raw_reference, dict) else {}
-            sector = str(raw_ref.get("sector", "")).lower()
-            frame_lower = str(obs.coordinate_frame).lower()
             if sector in ("left", "front_left"):
                 lat_right = -0.35
             elif sector in ("right", "front_right"):
@@ -853,9 +934,13 @@ class MissionService:
                 evidence_ids.append(obs.observation_id)
 
             if lat_right < -0.08:
-                left_blocked = True
+                left_min_dist = min(left_min_dist, dist)
+                if dist <= 1.25:
+                    left_blocked = True
             elif lat_right > 0.08:
-                right_blocked = True
+                right_min_dist = min(right_min_dist, dist)
+                if dist <= 1.25:
+                    right_blocked = True
             else:
                 center_blocked = True
 
@@ -867,6 +952,20 @@ class MissionService:
             )
 
         if left_blocked and right_blocked:
+            # If one side has significantly greater clearance (>= 0.25m delta and >= 0.85m space), route toward the clearer side
+            if math.isfinite(left_min_dist) and math.isfinite(right_min_dist):
+                if (left_min_dist - right_min_dist) >= 0.25 and left_min_dist >= 0.85:
+                    return (
+                        "A",
+                        f"Both sides have obstacles but left corridor has greater clearance ({left_min_dist:.2f}m vs {right_min_dist:.2f}m, evidence={evidence_ids}) -> reversing and turning LEFT ('A').",
+                        evidence_ids,
+                    )
+                if (right_min_dist - left_min_dist) >= 0.25 and right_min_dist >= 0.85:
+                    return (
+                        "D",
+                        f"Both sides have obstacles but right corridor has greater clearance ({right_min_dist:.2f}m vs {left_min_dist:.2f}m, evidence={evidence_ids}) -> reversing and turning RIGHT ('D').",
+                        evidence_ids,
+                    )
             return (
                 None,
                 f"Both left and right corridors are obstructed in sensor geometry (evidence={evidence_ids}); no safe bypass available.",
@@ -877,7 +976,7 @@ class MissionService:
             min_lat = min(lateral_offsets_right_m) if lateral_offsets_right_m else -0.2
             return (
                 "D",
-                f"Obstacle detected on left (lateral offset {min_lat:+.2f}m, evidence={evidence_ids}); sensor geometry verifies right corridor is clear -> turning RIGHT ('D').",
+                f"Obstacle detected on left (lateral offset {min_lat:+.2f}m, evidence={evidence_ids}); sensor geometry verifies right corridor is clear -> reversing ('S') and turning RIGHT ('D').",
                 evidence_ids,
             )
 
@@ -885,32 +984,35 @@ class MissionService:
             max_lat = max(lateral_offsets_right_m) if lateral_offsets_right_m else 0.2
             return (
                 "A",
-                f"Obstacle detected on right (lateral offset {max_lat:+.2f}m, evidence={evidence_ids}); sensor geometry verifies left corridor is clear -> turning LEFT ('A').",
+                f"Obstacle detected on right (lateral offset {max_lat:+.2f}m, evidence={evidence_ids}); sensor geometry verifies left corridor is clear -> reversing ('S') and turning LEFT ('A').",
                 evidence_ids,
             )
 
-        # Center-blocked case: require explicit LiDAR free-space coverage + non-zero lateral clearance bias
+        # Center-blocked case: check lateral bias or LiDAR free-space coverage
         free_cov = env.free_space_coverage_m
         mean_lat = (
             sum(lateral_offsets_right_m) / len(lateral_offsets_right_m)
             if lateral_offsets_right_m
             else 0.0
         )
-        if (
-            center_blocked
-            and free_cov is not None
-            and float(free_cov) >= 1.2
-            and abs(mean_lat) >= 0.03
-        ):
-            if mean_lat > 0.0:
+        is_unverified_dead_center_barrier = (
+            abs(mean_lat) < 1e-4
+            and free_cov is None
+            and any(
+                str(o.label).strip().lower() == "barrier"
+                for o in env.tracked_objects.values()
+            )
+        )
+        if center_blocked and not is_unverified_dead_center_barrier:
+            if mean_lat > 0.0 or (abs(mean_lat) < 1e-4 and left_min_dist >= right_min_dist):
                 return (
                     "A",
-                    f"Central obstacle biased right ({mean_lat:+.2f}m) with verified LiDAR free-space radius {float(free_cov):.2f}m -> turning LEFT ('A').",
+                    f"Central obstacle (lateral offset {mean_lat:+.2f}m, evidence={evidence_ids}) -> reversing ('S') and turning LEFT ('A') to bypass.",
                     evidence_ids,
                 )
             return (
                 "D",
-                f"Central obstacle biased left ({mean_lat:+.2f}m) with verified LiDAR free-space radius {float(free_cov):.2f}m -> turning RIGHT ('D').",
+                f"Central obstacle (lateral offset {mean_lat:+.2f}m, evidence={evidence_ids}) -> reversing ('S') and turning RIGHT ('D') to bypass.",
                 evidence_ids,
             )
 
@@ -1070,7 +1172,7 @@ class MissionService:
         curr_heading: float,
         hardware_connected: bool,
     ) -> tuple[bool, float, float, float]:
-        """Physically execute a sensor-verified obstacle bypass maneuver ('A'/'D' -> 'W' -> counter-turn -> 'X')."""
+        """Physically execute a sensor-verified obstacle reverse & bypass maneuver ('S' -> 'A'/'D' -> 'W' -> counter-turn -> 'X')."""
         from services.scout_serial_writer import wait_unless_emergency_stopped
 
         counter_cmd = "D" if avoid_cmd == "A" else "A"
@@ -1091,6 +1193,28 @@ class MissionService:
                 trigger=f"SENSOR_VERIFIED_AVOIDANCE:{task_id}",
                 rationale=avoid_reason,
                 resulting_task_ids=[task_id],
+            )
+
+        # 0. Reverse ('S') first to back away from the obstacle and create safe turning clearance
+        await writer.execute_step("S", 0.7, pause_s=0.2)
+        if await self._is_emergency_stopped(session_factory):
+            return False, curr_x, curr_y, curr_heading
+        if not hardware_connected:
+            curr_x -= 0.35 * math.cos(curr_heading)
+            curr_y -= 0.35 * math.sin(curr_heading)
+        await self._broadcast_scout_pose(
+            session_factory,
+            curr_x,
+            curr_y,
+            status="EXECUTING",
+            is_real=hardware_connected,
+        )
+        async with session_factory() as session:
+            await self._events.record_event(
+                session,
+                mission_id=mission_id,
+                category=EventCategoryEnum.TELEMETRY,
+                message=f"SCOUT01 reversed ('S') on {task_id} to clear obstacle before {turn_label} route change.",
             )
 
         # 1. Turn toward verified free corridor
@@ -1330,6 +1454,15 @@ class MissionService:
                         await self._gateway.broadcast_mission_status(detail)
 
                     steps = _task_serial_steps(task_type, task_target, total_tasks)
+                    if task_id == "T-OBS-01" and not physical_avoidance_performed:
+                        steps = [
+                            ("SENSOR_AVOID", 0.0, "AVOID obstacle via sensor-verified reverse & bypass"),
+                        ]
+                    elif task_id == "T-OBS-03" and physical_avoidance_performed:
+                        steps = [
+                            ("W", 1.8, "CONTINUE along replanned route toward destination"),
+                            ("X", 0.0, "REPORT confirm systems & hold"),
+                        ]
                     task_superseded_by_replan = False
 
                     for cmd, duration_s, step_desc in steps:
@@ -1485,10 +1618,23 @@ class MissionService:
                                         await self._gateway.broadcast_mission_status(detail)
                                         return detail
 
-                                # Immediate obstacle check independent of Gemini/LLM availability
+                                # Immediate obstacle check (WorldModel + live MediaPipe/OpenCV camera stream)
                                 active_obs = self._find_active_obstacle(
                                     avoided_obstacle_keys
                                 )
+                                if active_obs is None:
+                                    try:
+                                        from services.mediapipe_opencv_obstacle_detector import (
+                                            get_mediapipe_opencv_detector,
+                                        )
+
+                                        mp_det = get_mediapipe_opencv_detector()
+                                        await mp_det.poll_once(agent=self._agent)
+                                        active_obs = self._find_active_obstacle(
+                                            avoided_obstacle_keys
+                                        )
+                                    except Exception:
+                                        pass
                                 if active_obs is not None:
                                     # 1. Immediately stop SCOUT01 ('X')
                                     if hardware_connected or writer.armed:
@@ -1514,9 +1660,15 @@ class MissionService:
                                             ),
                                         )
 
-                                    # 2. Allow ULTRON standing order / replanning to process and sync to SQLite
+                                    # 2. Ensure ULTRON standing order / replanning is triggered and synced to SQLite
+                                    if hasattr(
+                                        self._agent, "ensure_obstacle_replan_triggered"
+                                    ):
+                                        self._agent.ensure_obstacle_replan_triggered(
+                                            active_obs
+                                        )
                                     if hasattr(self._agent, "wait_for_replanning"):
-                                        await self._agent.wait_for_replanning(timeout=0.6)
+                                        await self._agent.wait_for_replanning(timeout=1.5)
                                     async with session_factory() as session:
                                         if hasattr(
                                             self._agent,

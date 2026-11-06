@@ -787,7 +787,60 @@ describe("Operation Shadow Milestone 5 & 6 Tactical Command Dashboard", () => {
     });
   });
 
-  it("loads the short simulated hackathon demo objective", () => {
+  it("loads the physical judges demo objective and executes approved mission on SCOUT01", async () => {
+    vi.spyOn(apiClient, "fetchHealth").mockResolvedValue({
+      status: "ok",
+      database: "ok",
+      hardware_lockout: false,
+      default_vehicle_mode: "real",
+      ultron_is_stub: false,
+      vehicles: ["SCOUT01"],
+    });
+    vi.spyOn(apiClient, "createMission").mockResolvedValueOnce({
+      mission_id: "M010",
+      rationale: "Navigate to destination, detect and avoid obstacles via sensors.",
+    });
+    vi.spyOn(apiClient, "fetchMission").mockResolvedValueOnce({
+      id: "M010",
+      objective:
+        "Navigate to the destination, detect obstacles, avoid them and continue towards the destination.",
+      status: "ACTIVE",
+      created_at: "2026-10-30T16:00:00Z",
+      completed_at: null,
+      tasks: [
+        {
+          id: "M010-T01",
+          mission_id: "M010",
+          vehicle_id: "SCOUT01",
+          type: "RECON",
+          area: "SECTOR_A",
+          target: "Navigate to destination",
+          priority: 1,
+          status: "ASSIGNED",
+        },
+      ],
+    });
+    const executeSpy = vi.spyOn(apiClient, "executeMission").mockResolvedValueOnce({
+      id: "M010",
+      objective:
+        "Navigate to the destination, detect obstacles, avoid them and continue towards the destination.",
+      status: "COMPLETED",
+      created_at: "2026-10-30T16:00:00Z",
+      completed_at: "2026-10-30T16:00:15Z",
+      tasks: [
+        {
+          id: "M010-T01",
+          mission_id: "M010",
+          vehicle_id: "SCOUT01",
+          type: "RECON",
+          area: "SECTOR_A",
+          target: "Navigate to destination",
+          priority: 1,
+          status: "COMPLETED",
+        },
+      ],
+    });
+
     render(
       <DashboardProvider>
         <App enableWebSocket={false} />
@@ -796,8 +849,33 @@ describe("Operation Shadow Milestone 5 & 6 Tactical Command Dashboard", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "LOAD HACKATHON DEMO TASK" }));
     expect(screen.getByLabelText(/MISSION OBJECTIVE/i)).toHaveValue(
-      "Simulated SCOUT01: perform one short sweep of Sector Alpha, identify visible obstacles, and report findings.",
+      "Navigate to the destination, detect obstacles, avoid them and continue towards the destination.",
     );
+
+    // Step 1: Submit mission -> plan generated, awaiting operator approval
+    fireEvent.click(screen.getByRole("button", { name: "Submit Mission" }));
+    await waitFor(() => {
+      expect(screen.getByText(/AWAITING APPROVAL/i)).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("mission-plan-rationale")).toHaveTextContent(
+      /Navigate to destination, detect and avoid obstacles via sensors/i,
+    );
+    expect(executeSpy).not.toHaveBeenCalled();
+    // Simulated completion button is hidden when hardware_lockout is false
+    expect(
+      screen.queryByRole("button", { name: "Complete Simulated Mission" }),
+    ).not.toBeInTheDocument();
+
+    // Step 2: Operator clicks START MISSION (EXECUTE ON SCOUT01)
+    fireEvent.click(
+      screen.getByRole("button", { name: "Execute Mission on SCOUT01" }),
+    );
+    await waitFor(() => {
+      expect(executeSpy).toHaveBeenCalledWith("M010");
+      expect(
+        screen.getByText(/Mission M010 executed on SCOUT01 and marked COMPLETED/i),
+      ).toBeInTheDocument();
+    });
   });
 
   // 11 & 12. Emergency-stop confirmation, partial failure, and distinction between HTTP 200 and confirmed stopping

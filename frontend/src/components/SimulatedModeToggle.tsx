@@ -18,12 +18,15 @@ export function SimulatedModeToggle(): React.JSX.Element {
 
   const vehicleList: VehicleId[] = ["SCOUT01"];
 
-  const handleEnableSimulatedMode = async (vehicleId: VehicleId): Promise<void> => {
+  const handleSetMode = async (
+    vehicleId: VehicleId,
+    simulatedEnabled: boolean,
+  ): Promise<void> => {
     setBusyVehicle(vehicleId);
     setStatusNotice(null);
     setErrorNotice(null);
     try {
-      const ack = await setVehicleSimulatedMode(vehicleId, true);
+      const ack = await setVehicleSimulatedMode(vehicleId, simulatedEnabled);
       dispatch({
         type: "SET_VEHICLE_MODE",
         payload: { vehicleId: ack.vehicle_id, mode: ack.mode },
@@ -62,11 +65,11 @@ export function SimulatedModeToggle(): React.JSX.Element {
         <h2 className="panel-title">OPERATING MODE &amp; LOCKOUT</h2>
         <span
           className={`badge ${
-            state.hardwareLockout ? "badge-warning" : "badge-critical"
+            state.hardwareLockout ? "badge-warning" : "badge-nominal"
           }`}
           style={{ fontSize: "9px", padding: "1px 6px" }}
         >
-          {state.hardwareLockout ? "LOCKED" : "UNLOCKED"}
+          {state.hardwareLockout ? "LOCKED" : "UNLOCKED (REAL READY)"}
         </span>
       </div>
 
@@ -79,7 +82,7 @@ export function SimulatedModeToggle(): React.JSX.Element {
             gap: "4px",
             borderLeft: state.hardwareLockout
               ? "2px solid var(--status-warning)"
-              : "2px solid var(--status-critical)",
+              : "2px solid var(--status-nominal)",
           }}
         >
           <div
@@ -87,11 +90,11 @@ export function SimulatedModeToggle(): React.JSX.Element {
               fontFamily: "var(--font-data)",
               fontSize: "10px",
               fontWeight: 600,
-              color: state.hardwareLockout ? "#D8A850" : "#E86060",
+              color: state.hardwareLockout ? "#D8A850" : "var(--status-nominal)",
             }}
           >
             Hardware Lockout:{" "}
-            {state.hardwareLockout ? "ACTIVE (Simulated Only)" : "INACTIVE"}
+            {state.hardwareLockout ? "ACTIVE (Simulated Only)" : "INACTIVE (Real Mode Active)"}
           </div>
           <div
             style={{
@@ -101,8 +104,9 @@ export function SimulatedModeToggle(): React.JSX.Element {
               lineHeight: 1.4,
             }}
           >
-            Physical hardware control is locked until TRD v2.0 &amp; Hardware/IoT
-            failsafes are verified.
+            {state.hardwareLockout
+              ? "Physical hardware control is locked until TRD v2.0 & Hardware/IoT failsafes are verified."
+              : "Physical ESP-NOW serial control & WiFi ROS perception are ACTIVE on SCOUT01."}
           </div>
         </div>
 
@@ -201,7 +205,7 @@ export function SimulatedModeToggle(): React.JSX.Element {
                   }`}
                   style={{ padding: "5px 8px", fontSize: "10px", width: "100%" }}
                   disabled={isBusy}
-                  onClick={() => void handleEnableSimulatedMode(vid)}
+                  onClick={() => void handleSetMode(vid, true)}
                   aria-label={`Set ${vid} to Simulated Mode`}
                 >
                   SIMULATED
@@ -212,11 +216,16 @@ export function SimulatedModeToggle(): React.JSX.Element {
                     v.mode === "real" ? "btn-primary" : "btn-secondary"
                   }`}
                   style={{ padding: "5px 8px", fontSize: "10px", width: "100%" }}
-                  disabled
-                  title="Real hardware mode is unavailable until external specifications and failsafes are verified."
+                  disabled={isBusy || state.hardwareLockout}
+                  onClick={() => void handleSetMode(vid, false)}
+                  title={
+                    state.hardwareLockout
+                      ? "Real hardware mode is unavailable until external specifications and failsafes are verified."
+                      : "Enable Real ESP-NOW Hardware Mode for SCOUT01"
+                  }
                   aria-label={`Attempt Real Hardware Mode for ${vid}`}
                 >
-                  REAL (LOCKED)
+                  {state.hardwareLockout ? "REAL (LOCKED)" : "REAL (ESP-NOW)"}
                 </button>
               </div>
             </div>

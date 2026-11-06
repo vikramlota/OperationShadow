@@ -90,9 +90,37 @@ def structured_to_sensor_observation(obs: StructuredObservation) -> SensorObserv
         "bench",
         "box",
         "obstacle",
+        "lidar_obstacle",
         "wall",
         "barrier",
         "table",
+        "dining table",
+        "diningtable",
+        "couch",
+        "sofa",
+        "potted plant",
+        "pottedplant",
+        "bed",
+        "tv",
+        "tvmonitor",
+        "laptop",
+        "backpack",
+        "suitcase",
+        "handbag",
+        "bottle",
+        "cup",
+        "trash can",
+        "cone",
+        "pillar",
+        "column",
+        "door",
+        "cabinet",
+        "refrigerator",
+        "person",
+        "bicycle",
+        "dog",
+        "cat",
+        "cart",
     }
 
     return SensorObservation(
@@ -189,7 +217,11 @@ def ingest_sensor_observation(
         sh.last_message_timestamp = obs.sensor_timestamp
         sh.last_ingested_at = obs.ingested_at
         sh.valid_message_count += 1
-        sh.is_stale = (obs.ingested_at - obs.sensor_timestamp) > sh.stale_after_sec
+        sh.is_stale = (
+            False
+            if obs.source_mode == SensorSourceModeEnum.PHYSICAL
+            else (obs.ingested_at - obs.sensor_timestamp) > sh.stale_after_sec
+        )
         sh.status = (
             SensorHealthStatusEnum.STALE
             if sh.is_stale
@@ -319,7 +351,7 @@ def ingest_sensor_observation(
         elif (
             obs.sensor_type in candidate.contributing_sensor_types
             and angular_separation_rad(candidate.position, obs.position) <= 0.15
-            and abs(obs.sensor_timestamp - candidate.last_observed_timestamp) <= max_dt
+            and abs(obs.sensor_timestamp - candidate.last_observed_timestamp) <= 1e-3
             and dist > (assoc_gate + combined_unc)
         ):
             # Conflicting simultaneous report in the same direction
@@ -341,13 +373,28 @@ def ingest_sensor_observation(
             if obs.observation_id not in candidate.contributing_observation_ids:
                 candidate.contributing_observation_ids.append(obs.observation_id)
             return world
+        elif (
+            obs.sensor_type in candidate.contributing_sensor_types
+            and angular_separation_rad(candidate.position, obs.position) <= 0.25
+            and obs.sensor_timestamp > candidate.last_observed_timestamp
+            and dist < best_dist
+        ):
+            # Same object moving closer/farther across sequential frames
+            best_dist = dist
+            matched_tracked = candidate
 
-    is_stale_obs = (obs.ingested_at - obs.sensor_timestamp) > ultron_config.camera_stale_after_sec
+    is_stale_obs = (
+        False
+        if obs.source_mode == SensorSourceModeEnum.PHYSICAL
+        else (obs.ingested_at - obs.sensor_timestamp) > ultron_config.camera_stale_after_sec
+    )
     map_pos: Optional[Position2D] = None
     if obs.coordinate_frame == "map" and world.environment.transform_map_validated:
         map_pos = Position2D(x=obs.position.x, y=obs.position.y)
 
     if matched_tracked is not None:
+        prev_range = matched_tracked.position.computed_range_m()
+        new_range = obs.position.computed_range_m()
         matched_tracked.position = obs.position
         matched_tracked.position_uncertainty_m = obs.position.uncertainty_m
         if map_pos is not None:
@@ -363,6 +410,11 @@ def ingest_sensor_observation(
         matched_tracked.last_known_source = obs.sensor_id
         matched_tracked.last_detector_object_id = obs.detector_object_id
         matched_tracked.source_mode = obs.source_mode
+        if obs.is_obstacle:
+            matched_tracked.is_obstacle = True
+            # If obstacle moved closer or entered stopping range, re-arm it so avoidance/replanning triggers
+            if matched_tracked.handled and (new_range <= 1.8 and (prev_range > 1.8 or (prev_range - new_range) >= 0.2)):
+                matched_tracked.handled = False
         if obs.observation_id not in matched_tracked.contributing_observation_ids:
             matched_tracked.contributing_observation_ids.append(obs.observation_id)
         if obs.sensor_type.value not in matched_tracked.contributing_sensor_types:
@@ -492,7 +544,11 @@ def refresh_world_model_freshness(
     )
 
     for tracked in world.environment.tracked_objects.values():
-        age = now - tracked.last_observed_timestamp
+        age_obs = now - tracked.last_observed_timestamp
+        if tracked.source_mode == SensorSourceModeEnum.PHYSICAL and tracked.last_ingested_at:
+            age = min(abs(age_obs), max(0.0, now - tracked.last_ingested_at))
+        else:
+            age = age_obs
         if age > threshold:
             tracked.currently_visible = False
             if tracked.tracking_status != TrackingStatusEnum.CONFLICTED:

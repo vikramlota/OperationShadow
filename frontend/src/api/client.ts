@@ -352,6 +352,7 @@ export interface MissionDetailPayload {
 
 export interface MissionCreateResponsePayload {
   mission_id: string;
+  rationale?: string | null;
 }
 
 export interface VehicleReadPayload {

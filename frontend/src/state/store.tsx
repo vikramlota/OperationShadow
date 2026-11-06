@@ -162,7 +162,7 @@ export interface DashboardState {
 }
 
 export type DashboardAction =
-  | { type: "SET_BACKEND_HEALTH"; payload: { reachable: boolean; hardwareLockout: boolean; ultronIsStub: boolean } }
+  | { type: "SET_BACKEND_HEALTH"; payload: { reachable: boolean; hardwareLockout: boolean; ultronIsStub: boolean; defaultVehicleMode?: VehicleMode } }
   | { type: "SET_WS_CONNECTED"; payload: boolean }
   | { type: "SET_WS_RECONNECTING"; payload: { attempt: number; error: string | null } }
   | { type: "SELECT_VEHICLE"; payload: VehicleId }
@@ -579,13 +579,28 @@ export function dashboardReducer(
   action: DashboardAction,
 ): DashboardState {
   switch (action.type) {
-    case "SET_BACKEND_HEALTH":
+    case "SET_BACKEND_HEALTH": {
+      const isRealDefault =
+        !action.payload.hardwareLockout &&
+        action.payload.defaultVehicleMode === "real";
       return {
         ...state,
         backendReachable: action.payload.reachable,
         hardwareLockout: action.payload.hardwareLockout,
         ultronIsStub: action.payload.ultronIsStub,
+        vehicles: isRealDefault
+          ? {
+              ...state.vehicles,
+              SCOUT01: {
+                ...state.vehicles.SCOUT01,
+                mode: "real",
+                connection: "CONNECTED",
+                isStale: false,
+              },
+            }
+          : state.vehicles,
       };
+    }
 
     case "SET_WS_CONNECTED": {
       const nextVehicles = action.payload
@@ -655,6 +670,9 @@ export function dashboardReducer(
           [vehicleId]: {
             ...state.vehicles[vehicleId],
             mode,
+            connection:
+              mode === "real" ? "CONNECTED" : state.vehicles[vehicleId].connection,
+            isStale: mode === "real" ? false : state.vehicles[vehicleId].isStale,
           },
         },
       };

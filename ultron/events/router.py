@@ -338,9 +338,11 @@ class EventRouter:
                 )
 
             # Reject stale source timestamps except for events explicitly reporting staleness/degradation
+            # or live physical ROSBridge events where rover-to-laptop clock offset may exist
             age_sec = event.received_at - event.source_timestamp
             if (
                 age_sec > self._stale_threshold_sec
+                and event.source_mode != SensorSourceModeEnum.PHYSICAL
                 and event.event_type
                 not in (EventTypeEnum.OBSERVATION_STALE, EventTypeEnum.SENSOR_DEGRADED)
             ):
